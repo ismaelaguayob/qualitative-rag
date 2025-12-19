@@ -272,11 +272,22 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
     if not contexto_datos_str:
         contexto_datos_str = "No specific empirical data found."
     
-    bridge_prompt = (
-        f"El usuario preguntó '{user_query}'. En los datos encontramos: '{contexto_datos_str}'. "
-        "Genera una frase de búsqueda técnica para encontrar literatura teórica relevante. "
-        "Responde SOLO con la frase de búsqueda."
-    )
+    bridge_prompt = f"""TAREA: Genera palabras clave para buscar literatura académica relevante.
+
+CONTEXTO:
+- Pregunta del usuario: "{user_query}"
+- Datos empíricos encontrados: {contexto_datos_str}
+
+INSTRUCCIONES:
+1. Extrae 5-10 conceptos clave de los datos que sean relevantes para la pregunta.
+2. Los conceptos deben ser términos académicos/teóricos buscables en literatura científica.
+3. Responde ÚNICAMENTE con los conceptos separados por comas.
+4. NO incluyas explicaciones, solo la lista de conceptos.
+
+FORMATO DE RESPUESTA:
+concepto1, concepto2, concepto3, concepto4, concepto5
+
+RESPUESTA:"""
     query_teorica_resp = llm_bridge.complete(bridge_prompt)
     query_teorica = query_teorica_resp.text.strip()
     
@@ -472,7 +483,7 @@ if prompt := st.chat_input("Escribe tu pregunta de investigación..."):
         with st.chat_message("assistant"):
             with st.spinner("Analizando datos y triangulando con teoría..."):
                 llm_main = GoogleGenAI(model=model_option)
-                llm_bridge = GoogleGenAI(model="gemma-3-27b")
+                llm_bridge = GoogleGenAI(model="gemma-3-27b-it")
                 
                 chat_history_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-4:]])
 
