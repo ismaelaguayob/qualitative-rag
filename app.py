@@ -28,6 +28,153 @@ DATOS_DIR = os.path.join(DATA_TEMP_PATH, "datos")
 ANTECEDENTES_DIR = os.path.join(DATA_TEMP_PATH, "antecedentes")
 EXTRACTED_TEXT_DIR = os.path.join(DATA_TEMP_PATH, "extracted_text")
 
+# --- i18n: Internationalization ---
+I18N = {
+    "es": {
+        "page_title": "Conversando con Datos Cualitativos",
+        "sidebar_header": "Configuración del Investigador",
+        "model_selector": "Selector de Modelo",
+        "discipline": "Disciplina",
+        "perspective": "Perspectiva Teórica",
+        "topic": "Tema de Investigación",
+        "file_upload": "Carga de Archivos",
+        "empirical_data": "Datos Empíricos / Fuentes Primarias",
+        "literature": "Antecedentes / Literatura",
+        "init_indices": "Inicializar Indices",
+        "reset_all": "Reiniciar Todo",
+        "clear_chat": "Limpiar Conversación",
+        "explore_sources": "📂 Explorar Fuentes",
+        "no_sources": "No hay fuentes indexadas aún.",
+        "content": "Contenido",
+        "main_title": "Conversando con los Datos",
+        "chat_placeholder": "Escribe tu pregunta de investigación...",
+        "init_indices_first": "Por favor inicializa los índices primero desde el panel lateral.",
+        "analyzing": "Analizando datos y triangulando con teoría...",
+        "evidence_title": "🔍 Revisar Evidencia y Trazabilidad",
+        "tab_data": "Datos Empíricos",
+        "tab_theory": "Antecedentes Teóricos",
+        "source": "Fuente",
+        "similarity": "Similitud",
+        "view_full_source": "📄 Ver Fuente Completa",
+        "extracted_content": "Contenido Extraído",
+        "text_not_available": "Texto extraído no disponible para {source}. Reinicia los índices.",
+        "bridge_query": "Query Puente",
+        "indices_created": "Indices creados. Datos: {d} docs, Antecedentes: {a} docs.",
+        "indices_failed": "Fallo al crear índices.",
+        "indices_reset": "Índices reiniciados. Puedes subir nuevos archivos.",
+        "processing": "Procesando archivos e índices...",
+        "api_key_error": "Por favor configura GOOGLE_API_KEY en el archivo .env",
+        "language": "Idioma",
+        "system_prompt": """Eres un investigador experto con un Doctorado en {discipline}.
+Estás analizando fuentes primarias desde una perspectiva {perspective}.
+Tu tema de investigación actual es: {topic}.
+
+TU OBJETIVO:
+Responder a la consulta del usuario analizando los DATOS EMPÍRICOS proporcionados.
+
+TUS FUENTES DE INFORMACIÓN:
+1. [DATOS EMPÍRICOS]: Esta es la evidencia textual que debes analizar (noticias, discursos, entrevistas, etc.). Es la verdad absoluta del caso.
+2. [ANTECEDENTES]: Es literatura y teoría para apoyar tu interpretación.
+
+INSTRUCCIONES DE RESPUESTA:
+- Basa tus afirmaciones principalmente en los [DATOS EMPÍRICOS].
+- Usa los [ANTECEDENTES] para teorizar o dar contexto a lo que encuentras en los datos.
+- Si los datos muestran algo distinto a la teoría, destaca esa tensión.
+- Cita siempre las fuentes. Ejemplo: "...se observa un patrón de negación ([Datos]: archivo_noticia.pdf)".""",
+        "bridge_prompt": """TAREA: Genera palabras clave para buscar literatura académica relevante.
+
+CONTEXTO:
+- Pregunta del usuario: "{query}"
+- Datos empíricos encontrados: {context}
+
+INSTRUCCIONES:
+1. Extrae 5-10 conceptos clave de los datos que sean relevantes para la pregunta.
+2. Los conceptos deben ser términos académicos/teóricos buscables en literatura científica.
+3. Responde ÚNICAMENTE con los conceptos separados por comas.
+4. NO incluyas explicaciones, solo la lista de conceptos.
+
+FORMATO DE RESPUESTA:
+concepto1, concepto2, concepto3, concepto4, concepto5
+
+RESPUESTA:"""
+    },
+    "en": {
+        "page_title": "Conversing with Qualitative Data",
+        "sidebar_header": "Researcher Configuration",
+        "model_selector": "Model Selector",
+        "discipline": "Discipline",
+        "perspective": "Theoretical Perspective",
+        "topic": "Research Topic",
+        "file_upload": "File Upload",
+        "empirical_data": "Empirical Data / Primary Sources",
+        "literature": "Background / Literature",
+        "init_indices": "Initialize Indices",
+        "reset_all": "Reset All",
+        "clear_chat": "Clear Chat",
+        "explore_sources": "📂 Explore Sources",
+        "no_sources": "No sources indexed yet.",
+        "content": "Content",
+        "main_title": "Conversing with Data",
+        "chat_placeholder": "Write your research question...",
+        "init_indices_first": "Please initialize the indices first from the sidebar.",
+        "analyzing": "Analyzing data and triangulating with theory...",
+        "evidence_title": "🔍 Review Evidence and Traceability",
+        "tab_data": "Empirical Data",
+        "tab_theory": "Theoretical Background",
+        "source": "Source",
+        "similarity": "Similarity",
+        "view_full_source": "📄 View Full Source",
+        "extracted_content": "Extracted Content",
+        "text_not_available": "Extracted text not available for {source}. Reinitialize indices.",
+        "bridge_query": "Bridge Query",
+        "indices_created": "Indices created. Data: {d} docs, Background: {a} docs.",
+        "indices_failed": "Failed to create indices.",
+        "indices_reset": "Indices reset. You can upload new files.",
+        "processing": "Processing files and indices...",
+        "api_key_error": "Please set GOOGLE_API_KEY in the .env file",
+        "language": "Language",
+        "system_prompt": """You are an expert researcher with a PhD in {discipline}.
+You are analyzing primary sources from a {perspective} perspective.
+Your current research topic is: {topic}.
+
+YOUR OBJECTIVE:
+Answer the user's query by analyzing the provided EMPIRICAL DATA.
+
+YOUR SOURCES OF INFORMATION:
+1. [EMPIRICAL DATA]: This is the textual evidence you must analyze (news, speeches, interviews, etc.). It is the absolute truth of the case.
+2. [BACKGROUND]: Literature and theory to support your interpretation.
+
+RESPONSE INSTRUCTIONS:
+- Base your claims primarily on the [EMPIRICAL DATA].
+- Use [BACKGROUND] to theorize or provide context to your findings.
+- If the data shows something different from theory, highlight that tension.
+- Always cite sources. Example: "...a pattern of denial is observed ([Data]: news_file.pdf)".""",
+        "bridge_prompt": """TASK: Generate keywords to search for relevant academic literature.
+
+CONTEXT:
+- User question: "{query}"
+- Empirical data found: {context}
+
+INSTRUCTIONS:
+1. Extract 5-10 key concepts from the data that are relevant to the question.
+2. The concepts should be academic/theoretical terms searchable in scientific literature.
+3. Respond ONLY with concepts separated by commas.
+4. Do NOT include explanations, just the list of concepts.
+
+RESPONSE FORMAT:
+concept1, concept2, concept3, concept4, concept5
+
+RESPONSE:"""
+    }
+}
+
+def get_text(key, lang="es", **kwargs):
+    """Get translated text for the given key."""
+    text = I18N.get(lang, I18N["es"]).get(key, key)
+    if kwargs:
+        text = text.format(**kwargs)
+    return text
+
 # Initialize Directories
 os.makedirs(DATOS_DIR, exist_ok=True)
 os.makedirs(ANTECEDENTES_DIR, exist_ok=True)
@@ -251,7 +398,7 @@ def reset_indices_in_session():
 
 # --- Pipeline Logic ---
 
-def run_sociological_pipeline(user_query, chat_history, index_datos, index_antecedentes, llm_main, llm_bridge, disciplana, perspectiva, tema):
+def run_sociological_pipeline(user_query, chat_history, index_datos, index_antecedentes, llm_main, llm_bridge, disciplina, perspectiva, tema, lang="es"):
     
     retriever_datos = index_datos.as_retriever(similarity_top_k=5)
     retriever_antecedentes = index_antecedentes.as_retriever(similarity_top_k=3)
@@ -262,7 +409,7 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
     evidence_datos = []
     
     for node in nodes_datos:
-        text = normalize_extracted_text(node.text)  # [FIX 2] Normalize here too
+        text = normalize_extracted_text(node.text)
         file_name = node.metadata.get('file_name', 'Unknown')
         score = node.score if node.score else 0.0
         contexto_datos_str += f"- {text} (Fuente: {file_name})\n"
@@ -272,22 +419,8 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
     if not contexto_datos_str:
         contexto_datos_str = "No specific empirical data found."
     
-    bridge_prompt = f"""TAREA: Genera palabras clave para buscar literatura académica relevante.
-
-CONTEXTO:
-- Pregunta del usuario: "{user_query}"
-- Datos empíricos encontrados: {contexto_datos_str}
-
-INSTRUCCIONES:
-1. Extrae 5-10 conceptos clave de los datos que sean relevantes para la pregunta.
-2. Los conceptos deben ser términos académicos/teóricos buscables en literatura científica.
-3. Responde ÚNICAMENTE con los conceptos separados por comas.
-4. NO incluyas explicaciones, solo la lista de conceptos.
-
-FORMATO DE RESPUESTA:
-concepto1, concepto2, concepto3, concepto4, concepto5
-
-RESPUESTA:"""
+    # Use i18n bridge prompt
+    bridge_prompt = get_text("bridge_prompt", lang, query=user_query, context=contexto_datos_str)
     query_teorica_resp = llm_bridge.complete(bridge_prompt)
     query_teorica = query_teorica_resp.text.strip()
     
@@ -303,31 +436,15 @@ RESPUESTA:"""
     evidence_antecedentes = []
 
     for node in nodes_antecedentes:
-        text = normalize_extracted_text(node.text)  # [FIX 2] Normalize here too
+        text = normalize_extracted_text(node.text)
         file_name = node.metadata.get('file_name', 'Unknown')
         score = node.score if node.score else 0.0
         contexto_antecedentes_str += f"- {text} (Fuente: {file_name})\n"
         evidence_antecedentes.append({"text": text, "source": file_name, "score": score})
 
     # --- Step D: Synthesis ---
-    system_content = f"""
-    Eres un investigador experto con un Doctorado en {disciplana}.
-    Estás analizando fuentes primarias desde una perspectiva {perspectiva}.
-    Tu tema de investigación actual es: {tema}.
-
-    TU OBJETIVO:
-    Responder a la consulta del usuario analizando los DATOS EMPÍRICOS proporcionados.
-
-    TUS FUENTES DE INFORMACIÓN:
-    1. [DATOS EMPÍRICOS]: Esta es la evidencia textual que debes analizar (noticias, discursos, entrevistas, etc.). Es la verdad absoluta del caso.
-    2. [ANTECEDENTES]: Es literatura y teoría para apoyar tu interpretación.
-
-    INSTRUCCIONES DE RESPUESTA:
-    - Basa tus afirmaciones principalmente en los [DATOS EMPÍRICOS].
-    - Usa los [ANTECEDENTES] para teorizar o dar contexto a lo que encuentras en los datos.
-    - Si los datos muestran algo distinto a la teoría, destaca esa tensión.
-    - Cita siempre las fuentes. Ejemplo: "...se observa un patrón de negación ([Datos]: archivo_noticia.pdf)".
-    """
+    # Use i18n system prompt
+    system_content = get_text("system_prompt", lang, discipline=disciplina, perspective=perspectiva, topic=tema)
 
     user_content_final = (
         f"HISTORIAL CHAT:\n{chat_history}\n\n"
@@ -349,33 +466,53 @@ RESPUESTA:"""
 
 st.set_page_config(page_title="Conversando con Datos Cualitativos", layout="wide")
 
+# Language selector (stored in session state)
+if "lang" not in st.session_state:
+    st.session_state.lang = "es"
+
 # Auto-restore indices if they exist from a previous session
 indices_restored = try_restore_indices()
 
+# Helper to get current language
+lang = st.session_state.lang
+t = lambda key, **kwargs: get_text(key, lang, **kwargs)
+
 # Sidebar
 with st.sidebar:
-    st.header("Configuración del Investigador")
+    # Language toggle at the top
+    col_lang1, col_lang2 = st.columns([1, 1])
+    with col_lang1:
+        if st.button("🇪🇸 Español", use_container_width=True, type="primary" if lang == "es" else "secondary"):
+            st.session_state.lang = "es"
+            st.rerun()
+    with col_lang2:
+        if st.button("🇬🇧 English", use_container_width=True, type="primary" if lang == "en" else "secondary"):
+            st.session_state.lang = "en"
+            st.rerun()
+    
+    st.divider()
+    st.header(t("sidebar_header"))
     
     model_option = st.selectbox(
-        "Selector de Modelo",
+        t("model_selector"),
         ("gemini-2.5-flash-lite", "gemini-3-flash-preview", "gemini-3-pro-preview")
     )
     
-    disciplina = st.text_input("Disciplina", "Sociología")
-    perspectiva = st.text_input("Perspectiva Teórica", "Feminismo")
-    tema = st.text_input("Tema de Investigación", "Experiencias sobre maternidad")
+    disciplina = st.text_input(t("discipline"), "Sociología" if lang == "es" else "Sociology")
+    perspectiva = st.text_input(t("perspective"), "Feminismo" if lang == "es" else "Feminism")
+    tema = st.text_input(t("topic"), "Experiencias sobre maternidad" if lang == "es" else "Motherhood experiences")
 
-    st.subheader("Carga de Archivos")
-    uploaded_datos = st.file_uploader("Datos Empíricos / Fuentes Primarias", accept_multiple_files=True, key="uploader_datos")
-    uploaded_antecedentes = st.file_uploader("Antecedentes / Literatura", accept_multiple_files=True, key="uploader_antecedentes")
+    st.subheader(t("file_upload"))
+    uploaded_datos = st.file_uploader(t("empirical_data"), accept_multiple_files=True, key="uploader_datos")
+    uploaded_antecedentes = st.file_uploader(t("literature"), accept_multiple_files=True, key="uploader_antecedentes")
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Inicializar Indices"):
+        if st.button(t("init_indices")):
             if not os.environ.get("GOOGLE_API_KEY"):
-                st.error("Please set GOOGLE_API_KEY in .env file")
+                st.error(t("api_key_error"))
             else:
-                with st.spinner("Procesando archivos e índices..."):
+                with st.spinner(t("processing")):
                     reset_directories()
                     save_uploaded_files(uploaded_datos, DATOS_DIR)
                     save_uploaded_files(uploaded_antecedentes, ANTECEDENTES_DIR)
@@ -385,26 +522,24 @@ with st.sidebar:
                     if index_datos and index_antecedentes:
                         st.session_state['index_datos'] = index_datos
                         st.session_state['index_antecedentes'] = index_antecedentes
-                        st.success(f"Indices creados. Datos: {count_d} docs, Antecedentes: {count_a} docs.")
+                        st.success(t("indices_created", d=count_d, a=count_a))
                     else:
-                        st.error("Fallo al crear índices.")
+                        st.error(t("indices_failed"))
     
     with col2:
-        # [FIX 1] Use proper reset function that doesn't lock DB
-        if st.button("Reiniciar Todo"):
+        if st.button(t("reset_all")):
             if reset_indices_in_session():
                 st.session_state.messages = []
-                st.success("Índices reiniciados. Puedes subir nuevos archivos.")
+                st.success(t("indices_reset"))
                 st.rerun()
 
-    if st.button("Limpiar Conversación"):
+    if st.button(t("clear_chat")):
         st.session_state.messages = []
         st.rerun()
 
-    # [FIX 3] Source Browser - Show uploaded files
-    st.subheader("📂 Explorar Fuentes")
+    # Source Browser
+    st.subheader(t("explore_sources"))
     
-    # Check for extracted text files
     if os.path.exists(EXTRACTED_TEXT_DIR):
         txt_files = [f for f in os.listdir(EXTRACTED_TEXT_DIR) if f.endswith('.txt')]
         if txt_files:
@@ -414,24 +549,23 @@ with st.sidebar:
                     txt_path = os.path.join(EXTRACTED_TEXT_DIR, txt_file)
                     with open(txt_path, "r", encoding="utf-8") as f:
                         content = f.read()
-                    st.text_area("Contenido", content, height=200, disabled=True, key=f"browse_{txt_file}")
+                    st.text_area(t("content"), content, height=200, disabled=True, key=f"browse_{txt_file}")
         else:
-            st.caption("No hay fuentes indexadas aún.")
+            st.caption(t("no_sources"))
     else:
-        st.caption("No hay fuentes indexadas aún.")
+        st.caption(t("no_sources"))
 
 # Main Interface
-st.title("Conversando con los Datos")
+st.title(t("main_title"))
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 
-def render_evidence_item(item, idx, prefix):
+def render_evidence_item(item, idx, prefix, lang):
     """Render a single evidence item with proper formatting."""
-    st.markdown(f"**Fuente:** `{item['source']}` | **Similitud:** {item['score']:.4f}")
+    st.markdown(f"**{get_text('source', lang)}:** `{item['source']}` | **{get_text('similarity', lang)}:** {item['score']:.4f}")
     
-    # [FIX 2] Use normalized and formatted text
     formatted_text = format_text_for_display(item['text'])
     st.markdown(
         f"<div style='background-color: #262730; padding: 12px; border-radius: 8px; "
@@ -439,17 +573,16 @@ def render_evidence_item(item, idx, prefix):
         unsafe_allow_html=True
     )
     
-    # Full source expander
     safe_name = item['source'].replace("/", "_").replace("\\", "_")
     txt_path = os.path.join(EXTRACTED_TEXT_DIR, f"{safe_name}.txt")
     
-    with st.expander(f"📄 Ver Fuente Completa: {item['source']}", expanded=False):
+    with st.expander(f"{get_text('view_full_source', lang)}: {item['source']}", expanded=False):
         if os.path.exists(txt_path):
             with open(txt_path, "r", encoding="utf-8") as f:
                 full_content = f.read()
-            st.text_area("Contenido Extraído", full_content, height=300, disabled=True, key=f"ta_{prefix}_{idx}")
+            st.text_area(get_text("extracted_content", lang), full_content, height=300, disabled=True, key=f"ta_{prefix}_{idx}")
         else:
-            st.warning(f"Texto extraído no disponible para {item['source']}. Reinicia los índices.")
+            st.warning(get_text("text_not_available", lang, source=item['source']))
     
     st.divider()
 
@@ -459,29 +592,29 @@ for msg_idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "evidence" in message:
-            with st.expander("🔍 Revisar Evidencia y Trazabilidad"):
-                tab_datos, tab_teoria = st.tabs(["Datos Empíricos", "Antecedentes Teóricos"])
+            with st.expander(t("evidence_title")):
+                tab_datos, tab_teoria = st.tabs([t("tab_data"), t("tab_theory")])
                 with tab_datos:
                     for i, item in enumerate(message["evidence"]["datos"]):
-                        render_evidence_item(item, i, f"hist_{msg_idx}_dato")
+                        render_evidence_item(item, i, f"hist_{msg_idx}_dato", lang)
 
                 with tab_teoria:
                     if message["evidence"]["query_teorica"]:
-                        st.info(f"Query Puente: {message['evidence']['query_teorica']}")
+                        st.info(f"{t('bridge_query')}: {message['evidence']['query_teorica']}")
                     for i, item in enumerate(message["evidence"]["antecedentes"]):
-                        render_evidence_item(item, i, f"hist_{msg_idx}_ante")
+                        render_evidence_item(item, i, f"hist_{msg_idx}_ante", lang)
 
 # Chat Input
-if prompt := st.chat_input("Escribe tu pregunta de investigación..."):
+if prompt := st.chat_input(t("chat_placeholder")):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     if 'index_datos' not in st.session_state or 'index_antecedentes' not in st.session_state:
-        st.error("Por favor inicializa los índices primero desde el panel lateral.")
+        st.error(t("init_indices_first"))
     else:
         with st.chat_message("assistant"):
-            with st.spinner("Analizando datos y triangulando con teoría..."):
+            with st.spinner(t("analyzing")):
                 llm_main = GoogleGenAI(model=model_option)
                 llm_bridge = GoogleGenAI(model="gemma-3-27b-it")
                 
@@ -496,21 +629,22 @@ if prompt := st.chat_input("Escribe tu pregunta de investigación..."):
                     llm_bridge,
                     disciplina,
                     perspectiva,
-                    tema
+                    tema,
+                    lang  # Pass language to pipeline
                 )
                 
                 st.markdown(response_text)
                 
-                with st.expander("🔍 Revisar Evidencia y Trazabilidad"):
-                    tab_datos, tab_teoria = st.tabs(["Datos Empíricos", "Antecedentes Teóricos"])
+                with st.expander(t("evidence_title")):
+                    tab_datos, tab_teoria = st.tabs([t("tab_data"), t("tab_theory")])
                     with tab_datos:
                         for i, item in enumerate(ev_datos):
-                            render_evidence_item(item, i, "new_dato")
+                            render_evidence_item(item, i, "new_dato", lang)
 
                     with tab_teoria:
-                        st.info(f"Query Puente: {q_teo}")
+                        st.info(f"{t('bridge_query')}: {q_teo}")
                         for i, item in enumerate(ev_ante):
-                            render_evidence_item(item, i, "new_ante")
+                            render_evidence_item(item, i, "new_ante", lang)
                 
                 st.session_state.messages.append({
                     "role": "assistant", 
@@ -521,3 +655,4 @@ if prompt := st.chat_input("Escribe tu pregunta de investigación..."):
                         "query_teorica": q_teo
                     }
                 })
+
