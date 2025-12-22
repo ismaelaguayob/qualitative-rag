@@ -65,6 +65,15 @@ I18N = {
         "processing": "Procesando archivos e índices...",
         "api_key_error": "Por favor configura GOOGLE_API_KEY en el archivo .env",
         "language": "Idioma",
+        "advanced_settings": "⚙️ Ajustes Avanzados",
+        "chunk_size": "Tamaño de Chunk (caracteres)",
+        "chunk_overlap": "Overlap de Chunk (caracteres)",
+        "top_k_data": "Top-K Datos Empíricos",
+        "top_k_theory": "Top-K Antecedentes",
+        "chunk_size_help": "Tamaño de cada fragmento de texto. Menor = más granular.",
+        "chunk_overlap_help": "Solapamiento entre chunks. Mayor = menos pérdida de contexto.",
+        "top_k_help": "Cantidad de fragmentos a recuperar por consulta.",
+        "settings_note": "⚠️ Reinicializa los índices después de cambiar estos valores.",
         "system_prompt": """Eres un investigador experto con un Doctorado en {discipline}.
 Estás analizando fuentes primarias desde una perspectiva {perspective}.
 Tu tema de investigación actual es: {topic}.
@@ -133,6 +142,15 @@ RESPUESTA:"""
         "processing": "Processing files and indices...",
         "api_key_error": "Please set GOOGLE_API_KEY in the .env file",
         "language": "Language",
+        "advanced_settings": "⚙️ Advanced Settings",
+        "chunk_size": "Chunk Size (characters)",
+        "chunk_overlap": "Chunk Overlap (characters)",
+        "top_k_data": "Top-K Empirical Data",
+        "top_k_theory": "Top-K Background",
+        "chunk_size_help": "Size of each text fragment. Smaller = more granular.",
+        "chunk_overlap_help": "Overlap between chunks. Higher = less context loss.",
+        "top_k_help": "Number of fragments to retrieve per query.",
+        "settings_note": "⚠️ Reinitialize indices after changing these values.",
         "system_prompt": """You are an expert researcher with a PhD in {discipline}.
 You are analyzing primary sources from a {perspective} perspective.
 Your current research topic is: {topic}.
@@ -293,7 +311,11 @@ def try_restore_indices():
 def initialize_indices():
     """Ingest documents and create/persist vector indices."""
     try:
-        # [FIX 1] Use shared ChromaDB client from session state
+        # Use chunk settings from session state (or defaults)
+        Settings.chunk_size = st.session_state.get("chunk_size", 512)
+        Settings.chunk_overlap = st.session_state.get("chunk_overlap", 128)
+        
+        # Use shared ChromaDB client from session state
         db = get_chroma_client()
 
         # Delete existing collections if they exist (reset within same session)
@@ -400,8 +422,12 @@ def reset_indices_in_session():
 
 def run_sociological_pipeline(user_query, chat_history, index_datos, index_antecedentes, llm_main, llm_bridge, disciplina, perspectiva, tema, lang="es"):
     
-    retriever_datos = index_datos.as_retriever(similarity_top_k=5)
-    retriever_antecedentes = index_antecedentes.as_retriever(similarity_top_k=3)
+    # Use top_k from session state (or defaults)
+    top_k_data = st.session_state.get("top_k_data", 7)
+    top_k_theory = st.session_state.get("top_k_theory", 5)
+    
+    retriever_datos = index_datos.as_retriever(similarity_top_k=top_k_data)
+    retriever_antecedentes = index_antecedentes.as_retriever(similarity_top_k=top_k_theory)
 
     # --- Step A: Grounding ---
     nodes_datos = retriever_datos.retrieve(user_query)
@@ -453,14 +479,33 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
         f"PREGUNTA USUARIO: {user_query}\n"
     )
     
+    # Debug Logging - System Prompt and Final Prompt
+    with open(os.path.join(debug_dir, "system_prompt_log.txt"), "a") as f:
+        f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        f.write(f"Query: {user_query}\n")
+        f.write(f"Language: {lang}\n")
+        f.write(f"---\n{system_content}\n\n")
+    
+    with open(os.path.join(debug_dir, "final_prompt_log.txt"), "a") as f:
+        f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        f.write(f"Query: {user_query}\n")
+        f.write(f"---\n{user_content_final}\n\n")
+    
     messages = [
         ChatMessage(role="system", content=system_content),
         ChatMessage(role="user", content=user_content_final)
     ]
 
     response = llm_main.chat(messages)
+    response_text = response.message.content
     
-    return response.message.content, evidence_datos, evidence_antecedentes, query_teorica
+    # Debug Logging - Model Response
+    with open(os.path.join(debug_dir, "response_log.txt"), "a") as f:
+        f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        f.write(f"Query: {user_query}\n")
+        f.write(f"---\n{response_text}\n\n")
+    
+    return response_text, evidence_datos, evidence_antecedentes, query_teorica
 
 # --- Streamlit UI ---
 
@@ -501,6 +546,47 @@ with st.sidebar:
     disciplina = st.text_input(t("discipline"), "Sociología" if lang == "es" else "Sociology")
     perspectiva = st.text_input(t("perspective"), "Feminismo" if lang == "es" else "Feminism")
     tema = st.text_input(t("topic"), "Experiencias sobre maternidad" if lang == "es" else "Motherhood experiences")
+
+    # Advanced Settings Expander
+    with st.expander(t("advanced_settings"), expanded=False):
+        st.caption(t("settings_note"))
+        
+        # Initialize session state for settings if not exists
+        if "chunk_size" not in st.session_state:
+            st.session_state.chunk_size = 512
+        if "chunk_overlap" not in st.session_state:
+            st.session_state.chunk_overlap = 128
+        if "top_k_data" not in st.session_state:
+            st.session_state.top_k_data = 7
+        if "top_k_theory" not in st.session_state:
+            st.session_state.top_k_theory = 5
+        
+        st.session_state.chunk_size = st.slider(
+            t("chunk_size"), 
+            min_value=256, max_value=2048, 
+            value=st.session_state.chunk_size, 
+            step=128,
+            help=t("chunk_size_help")
+        )
+        st.session_state.chunk_overlap = st.slider(
+            t("chunk_overlap"), 
+            min_value=64, max_value=512, 
+            value=st.session_state.chunk_overlap, 
+            step=64,
+            help=t("chunk_overlap_help")
+        )
+        st.session_state.top_k_data = st.slider(
+            t("top_k_data"), 
+            min_value=3, max_value=15, 
+            value=st.session_state.top_k_data,
+            help=t("top_k_help")
+        )
+        st.session_state.top_k_theory = st.slider(
+            t("top_k_theory"), 
+            min_value=3, max_value=15, 
+            value=st.session_state.top_k_theory,
+            help=t("top_k_help")
+        )
 
     st.subheader(t("file_upload"))
     uploaded_datos = st.file_uploader(t("empirical_data"), accept_multiple_files=True, key="uploader_datos")
