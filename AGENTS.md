@@ -21,6 +21,7 @@
 - Indentation: 4 spaces; prefer descriptive snake_case for variables and functions.
 - Constants are upper snake case (e.g., `CHROMA_PATH`).
 - Keep user-facing strings in the `I18N` dictionary and reuse `get_text`.
+- New features must add **both Spanish and English** entries in `I18N` for any UI text, warnings, or errors.
 
 ## Testing Guidelines
 - No automated test suite is configured yet. If you add tests, document the command(s) here.

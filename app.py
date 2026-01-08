@@ -46,6 +46,15 @@ I18N = {
         "sidebar_header": "Configuración del Investigador",
         "model_selector": "Selector de Modelo",
         "api_key_error": "Por favor configura GROQ_KEY en el archivo .env",
+        "voyage_key_missing": "VOYAGE_KEY no encontrado en .env. Embeddings pueden fallar.",
+        "embedding_init_error": "Error al inicializar el modelo de embeddings: {error}",
+        "indices_init_error": "Error al inicializar índices: {error}",
+        "reset_error": "Error al reiniciar índices: {error}",
+        "topic_build_error": "No se pudo crear tópicos: {error}",
+        "pipeline_error": "Ocurrió un error al procesar la consulta. Revisa el log de errores.",
+        "suggestions_error": "No se pudieron generar sugerencias: {error}",
+        "indices_not_ready": "⚠️ Índices no inicializados. Sube archivos y crea índices para usar el chat.",
+        "bootstrap_skipped": "Bootstrap omitido: índices no disponibles.",
         "discipline": "Disciplina",
         "perspective": "Perspectiva Teórica",
         "topic": "Tema de Investigación",
@@ -127,6 +136,15 @@ RESPUESTA:"""
         "sidebar_header": "Researcher Configuration",
         "model_selector": "Model Selector",
         "api_key_error": "Please set GROQ_KEY in the .env file",
+        "voyage_key_missing": "VOYAGE_KEY not found in .env. Embeddings may fail.",
+        "embedding_init_error": "Error initializing embedding model: {error}",
+        "indices_init_error": "Error initializing indices: {error}",
+        "reset_error": "Error resetting indices: {error}",
+        "topic_build_error": "Failed to build topics: {error}",
+        "pipeline_error": "An error occurred while processing the query. Check the error log.",
+        "suggestions_error": "Failed to generate suggestions: {error}",
+        "indices_not_ready": "⚠️ Indices not initialized. Upload files and create indices to use chat.",
+        "bootstrap_skipped": "Bootstrap skipped: indices not available.",
         "discipline": "Discipline",
         "perspective": "Theoretical Perspective",
         "topic": "Research Topic",
@@ -288,7 +306,7 @@ def get_stop_words(lang):
 try:
     voyage_key = os.getenv("VOYAGE_KEY")
     if not voyage_key:
-        st.warning("VOYAGE_KEY no encontrado en .env. Embeddings pueden fallar.")
+        st.warning(get_text("voyage_key_missing", "es"))
         log_bug_event("VOYAGE_KEY missing; embeddings may fail.")
 
     primary_model = "voyage-3-large"
@@ -324,7 +342,7 @@ try:
 except Exception as e:
     log_bug_event(f"Embedding model init failed: {e}")
     log_bug_event(traceback.format_exc())
-    st.error(f"Error initializing Embedding Model: {e}")
+    st.error(get_text("embedding_init_error", "es", error=e))
 
 # LlamaIndex Settings
 Settings.chunk_size = 1024
@@ -905,7 +923,7 @@ def initialize_indices():
     except Exception as e:
         log_bug_event(f"Initialize indices failed: {e}")
         log_bug_event(traceback.format_exc())
-        st.error(f"Error initializing indices: {e}")
+        st.error(get_text("indices_init_error", lang, error=e))
         return None, None, 0, 0
 
 def reset_indices_in_session():
@@ -943,7 +961,7 @@ def reset_indices_in_session():
     except Exception as e:
         log_bug_event(f"Reset indices failed: {e}")
         log_bug_event(traceback.format_exc())
-        st.error(f"Error resetting indices: {e}")
+        st.error(get_text("reset_error", lang, error=e))
         return False
 
 # --- Pipeline Logic ---
@@ -1176,7 +1194,7 @@ with st.sidebar:
                             )
                         except Exception as e:
                             log_bug_event(f"Topic build failed: {e}")
-                            st.warning(f"No se pudo crear tópicos: {e}")
+                            st.warning(get_text("topic_build_error", lang, error=e))
                         st.success(t("indices_created", d=count_d, a=count_a))
                     else:
                         st.error(t("indices_failed"))
@@ -1222,18 +1240,24 @@ if "last_suggestions" not in st.session_state:
 if "hide_suggestions" not in st.session_state:
     st.session_state.hide_suggestions = False
 
+if 'index_datos' not in st.session_state or 'index_antecedentes' not in st.session_state:
+    st.warning(t("indices_not_ready"))
+
 if not st.session_state.messages and not st.session_state.pending_query:
     try:
-        db = get_chroma_client()
-        collection_datos = db.get_collection("index_datos")
-        llm_bootstrap = Groq(model="openai/gpt-oss-20b", api_key=os.getenv("GROQ_KEY"))
-        bootstrap_context = f"{tema} | {perspectiva} | {disciplina}"
-        st.session_state.last_suggestions = generate_bootstrap_suggestions(
-            bootstrap_context,
-            llm_bootstrap,
-            collection_datos,
-            lang
-        )
+        if "index_datos" in st.session_state:
+            db = get_chroma_client()
+            collection_datos = db.get_collection("index_datos")
+            llm_bootstrap = Groq(model="openai/gpt-oss-20b", api_key=os.getenv("GROQ_KEY"))
+            bootstrap_context = f"{tema} | {perspectiva} | {disciplina}"
+            st.session_state.last_suggestions = generate_bootstrap_suggestions(
+                bootstrap_context,
+                llm_bootstrap,
+                collection_datos,
+                lang
+            )
+        else:
+            log_topic_event(t("bootstrap_skipped"))
     except Exception as e:
         log_bug_event(f"Bootstrap suggestions failed: {e}")
 
@@ -1347,7 +1371,7 @@ if prompt:
                 except Exception as e:
                     log_bug_event(f"Pipeline failed: {e}")
                     log_bug_event(traceback.format_exc())
-                    st.error("Ocurrió un error al procesar la consulta. Revisa el log de errores.")
+                    st.error(t("pipeline_error"))
                     st.stop()
 
                 suggestions = []
@@ -1366,7 +1390,7 @@ if prompt:
                     st.session_state.hide_suggestions = False
                 except Exception as e:
                     log_bug_event(f"Suggestion generation failed: {e}")
-                    st.warning(f"No se pudieron generar sugerencias: {e}")
+                    st.warning(t("suggestions_error", error=e))
                 
                 st.markdown(response_text)
 

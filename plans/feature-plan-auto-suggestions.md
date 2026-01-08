@@ -75,20 +75,20 @@ Generar sugerencias de preguntas relevantes al **query del usuario** y al **cont
 ---
 
 ## Entregables
-1) **Módulo de topic modelling**
+1) **Módulo de topic modelling** ✅
    - K‑means con K configurable.
    - TF‑IDF/c‑TF‑IDF por tópico.
    - Export de `topic_id`, `topic_keywords`.
 
-2) **Persistencia en columnas/metadata**
+2) **Persistencia en columnas/metadata** ✅
    - Guardar `topic_id`, `topic_label`, `topic_keywords` en el vector store.
 
-3) **Servicio de sugerencias**
+3) **Servicio de sugerencias** ✅
    - Selección de tópicos por relevancia al query.
    - Modelo ligero para redacción final.
    - Salida JSON estructurada.
 
-4) **UI**
+4) **UI** ✅
    - Botones de quick‑reply debajo de la respuesta.
    - Logs de clicks (para evaluar utilidad).
 
@@ -102,6 +102,8 @@ Generar sugerencias de preguntas relevantes al **query del usuario** y al **cont
   - Repetir query similar y confirmar que no se recalcula el label.
 - **Calidad de sugerencias:** verificar 3‑6 preguntas claras, no duplicadas.
 - **Actualización incremental (si aplica):** agregar documentos nuevos y validar que sólo se actualicen tópicos necesarios.
+
+Estado: **Completado**.
 
 ---
 
