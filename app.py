@@ -10,6 +10,7 @@ import time
 import traceback
 import numpy as np
 import hashlib
+import sqlite3
 from llama_index.core import (
     VectorStoreIndex,
     SimpleDirectoryReader,
@@ -581,8 +582,75 @@ def generate_bootstrap_suggestions(context_text, llm_suggest, chroma_collection,
         })
     return normalized
 
+def generate_topic_labels(chroma_collection, llm_label, lang, top_k=3):
+    """Generate labels for all topics using top-k chunks per topic."""
+    payload = chroma_collection.get(include=["metadatas", "documents"])
+    metadatas = payload.get("metadatas", []) or []
+    documents = payload.get("documents", []) or []
+    ids = payload.get("ids", []) or []
+
+    topic_to_docs = defaultdict(list)
+    topic_to_meta = {}
+    for meta, doc, _id in zip(metadatas, documents, ids):
+        meta = meta or {}
+        topic_id = meta.get("topic_id")
+        if topic_id is None:
+            continue
+        topic_id = int(topic_id)
+        topic_to_docs[topic_id].append((doc, _id, meta))
+        if topic_id not in topic_to_meta:
+            topic_to_meta[topic_id] = {
+                "topic_id": topic_id,
+                "topic_keywords": meta.get("topic_keywords", "").strip()
+            }
+
+    if not topic_to_docs:
+        log_topic_event("Label generation skipped: no topics found in collection.")
+        return
+
+    topic_payload = []
+    for topic_id, items in topic_to_docs.items():
+        snippets = []
+        for doc, _id, _meta in items[:top_k]:
+            if doc:
+                snippets.append(normalize_extracted_text(doc)[:400])
+        topic_payload.append({
+            "topic_id": topic_id,
+            "topic_keywords": topic_to_meta.get(topic_id, {}).get("topic_keywords", ""),
+            "snippets": snippets
+        })
+
+    user_prompt = {
+        "task": "label_topics",
+        "topics": topic_payload,
+        "instructions": (
+            "Para cada tópico, genera un nombre general y comprensivo. "
+            "Usa keywords y snippets. Responde SOLO en JSON con 'topic_labels'."
+        ),
+        "schema": {
+            "topic_labels": [{"topic_id": "int", "topic_label": "string"}]
+        }
+    }
+
+    response = llm_label.complete(json.dumps(user_prompt, ensure_ascii=False))
+    response_text = response.text.strip()
+    payload = parse_json_response(response_text)
+    if not payload:
+        log_bug_event("Topic label generation returned invalid JSON.")
+        log_bug_event(f"Topic label raw response: {response_text[:2000]}")
+        return
+
+    topic_labels = payload.get("topic_labels", [])
+    labels_map = {
+        int(item.get("topic_id")): item.get("topic_label", "").strip()
+        for item in topic_labels if item.get("topic_id") is not None
+    }
+    update_topic_labels(chroma_collection, labels_map)
+    if labels_map:
+        log_topic_event(f"Updated topic labels: {labels_map}")
+
 def generate_suggestions(user_query, nodes_datos, llm_suggest, chroma_collection, lang):
-    """Generate topic-aware query suggestions and update labels if needed."""
+    """Generate topic-aware query suggestions."""
     topic_counter = Counter()
     topic_data = {}
     topic_to_chunks = defaultdict(list)
@@ -631,10 +699,6 @@ def generate_suggestions(user_query, nodes_datos, llm_suggest, chroma_collection
     top_topics = [topic_id for topic_id, _ in topic_counter.most_common(3)]
     selected_topics = [topic_data[t] for t in top_topics if t in topic_data]
 
-    topics_missing_label = [
-        topic for topic in selected_topics if not topic.get("topic_label")
-    ]
-
     topic_payload = []
     for topic in selected_topics:
         samples = topic_to_chunks.get(topic["topic_id"], [])[:2]
@@ -646,61 +710,29 @@ def generate_suggestions(user_query, nodes_datos, llm_suggest, chroma_collection
             "snippets": snippets
         })
 
-    system_prompt = (
-        "Eres un asistente que genera sugerencias de investigación. "
-        "Responde SOLO en JSON válido. No incluyas texto adicional."
-    )
-
-    if topics_missing_label:
-        user_prompt = {
-            "task": "label_and_suggest",
-            "user_query": user_query,
-            "topics": topic_payload,
-            "instructions": (
-                "1) Para cada tópico sin 'topic_label', crea un nombre general y comprensivo. "
-                "2) Genera 3-6 preguntas sugeridas relevantes al user_query y a los tópicos. "
-                "3) No repitas preguntas. Responde en JSON con 'topic_labels' y 'suggestions'."
-            ),
-            "constraints": [
-                "No hables como si fueras una persona entrevistada.",
-                "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
-                "Formula preguntas como investigador/a (tercera persona)."
-            ],
-            "schema": {
-                "topic_labels": [{"topic_id": "int", "topic_label": "string"}],
-                "suggestions": [{
-                    "id": "string",
-                    "text": "string",
-                    "topic_id": "int",
-                    "topic_label": "string",
-                    "source_chunk_ids": ["string"]
-                }]
-            }
+    user_prompt = {
+        "task": "suggest_only",
+        "user_query": user_query,
+        "topics": topic_payload,
+        "instructions": (
+            "Genera 3-6 preguntas sugeridas relevantes al user_query y a los tópicos. "
+            "No repitas preguntas. Responde en JSON con 'suggestions'."
+        ),
+        "constraints": [
+            "No hables como si fueras una persona entrevistada.",
+            "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
+            "Formula preguntas como investigador/a (tercera persona)."
+        ],
+        "schema": {
+            "suggestions": [{
+                "id": "string",
+                "text": "string",
+                "topic_id": "int",
+                "topic_label": "string",
+                "source_chunk_ids": ["string"]
+            }]
         }
-    else:
-        user_prompt = {
-            "task": "suggest_only",
-            "user_query": user_query,
-            "topics": topic_payload,
-            "instructions": (
-                "Genera 3-6 preguntas sugeridas relevantes al user_query y a los tópicos. "
-                "No repitas preguntas. Responde en JSON con 'suggestions'."
-            ),
-            "constraints": [
-                "No hables como si fueras una persona entrevistada.",
-                "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
-                "Formula preguntas como investigador/a (tercera persona)."
-            ],
-            "schema": {
-                "suggestions": [{
-                    "id": "string",
-                    "text": "string",
-                    "topic_id": "int",
-                    "topic_label": "string",
-                    "source_chunk_ids": ["string"]
-                }]
-            }
-        }
+    }
 
     response = llm_suggest.complete(json.dumps(user_prompt, ensure_ascii=False))
     response_text = response.text.strip()
@@ -710,16 +742,6 @@ def generate_suggestions(user_query, nodes_datos, llm_suggest, chroma_collection
         log_topic_event("Suggestion generation failed to parse JSON response.")
         log_bug_event(f"Suggestion raw response: {response_text[:2000]}")
         return []
-
-    if topics_missing_label:
-        topic_labels = payload.get("topic_labels", [])
-        labels_map = {
-            int(item.get("topic_id")): item.get("topic_label", "").strip()
-            for item in topic_labels if item.get("topic_id") is not None
-        }
-        update_topic_labels(chroma_collection, labels_map)
-        if labels_map:
-            log_topic_event(f"Updated topic labels: {labels_map}")
 
     suggestions = payload.get("suggestions", [])
     log_topic_event(
@@ -887,28 +909,36 @@ def initialize_indices():
         return None, None, 0, 0
 
 def reset_indices_in_session():
-    """[FIX 1] Reset indices without deleting the ChromaDB folder."""
+    """Reset indices via Chroma API to avoid filesystem locks."""
     try:
         db = get_chroma_client()
-        # Delete collections via API (this doesn't lock the file)
+
+        # Prefer API reset if available
+        if hasattr(db, "reset"):
+            try:
+                db.reset()
+            except Exception:
+                pass
+
+        # Delete collections via API
         try:
             db.delete_collection("index_datos")
-        except:
+        except Exception:
             pass
         try:
             db.delete_collection("index_antecedentes")
-        except:
+        except Exception:
             pass
-        
+
         # Clear session state indices
         if 'index_datos' in st.session_state:
             del st.session_state['index_datos']
         if 'index_antecedentes' in st.session_state:
             del st.session_state['index_antecedentes']
-        
+
         # Clear temp data directories
         reset_directories()
-        
+
         return True
     except Exception as e:
         log_bug_event(f"Reset indices failed: {e}")
@@ -1131,6 +1161,13 @@ with st.sidebar:
                                 collection_datos,
                                 st.session_state.get("topic_k", 6),
                                 lang
+                            )
+                            llm_label = Groq(model="openai/gpt-oss-20b", api_key=os.getenv("GROQ_KEY"))
+                            generate_topic_labels(
+                                collection_datos,
+                                llm_label=llm_label,
+                                lang=lang,
+                                top_k=3
                             )
                             # Refresh index to include updated metadata after topic build
                             refreshed_store = ChromaVectorStore(chroma_collection=collection_datos)

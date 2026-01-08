@@ -3,8 +3,11 @@
 ## Project Structure & Module Organization
 - `app.py` houses the Streamlit app and the full RAG-in-cascade pipeline.
 - `chroma_db/` stores the persistent Chroma vector database.
-- `data_temp/` is a working area for uploaded files, extracted text, and debug logs.
-- `docs-llm/` contains integration notes for GenAI and Hugging Face.
+- `data_temp/` is a working area for uploaded files, extracted text, and logs.
+- `data_temp/debug/` centralizes runtime logs for troubleshooting across sessions.
+- `data_temp/dev_sessions/` should be updated at the end of each dev session with key changes and next steps.
+- `documentation/` contains integration notes for providers and packages in use.
+- `plans/` contains feature plans and implementation drafts.
 - `requirements.txt` lists Python dependencies.
 
 ## Build, Test, and Development Commands
@@ -30,3 +33,7 @@
 ## Security & Configuration Notes
 - Required env vars live in `.env`: `GROQ_KEY` and `VOYAGE_KEY`.
 - Do not commit credentials or uploaded data artifacts from `data_temp/`.
+  
+## Debug & Session Logs (Important)
+- Always inspect `data_temp/debug/` when troubleshooting; logs are the source of truth for runtime issues.
+- After each dev session, document the main changes and next steps in `data_temp/dev_sessions/YYYY-MM-DD.md` to keep continuity across chats.

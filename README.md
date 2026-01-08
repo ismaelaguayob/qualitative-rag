@@ -5,7 +5,12 @@ Herramienta de análisis cualitativo asistido por IA que permite "conversar" con
 ## Características
 * **Pipeline Secuencial**: Grounding (Datos) -> Bridging (Consulta Teórica) -> Theorizing (Literatura) -> Síntesis.
 * **Embeddings Serverless**: Usa la API de VoyageAI (`voyage-3-large`) para evitar costos y cuotas.
+* **Sugerencias automáticas**: Topic modelling + LLM ligero para propuestas de preguntas.
 * **Trazabilidad**: Visualización transparente de la evidencia utilizada en cada paso.
+
+## Documentación
+* `documentation/` contiene notas de integración de proveedores (embeddings/LLMs).
+* `plans/` contiene los planes de implementación discutidos.
 
 ## Requisitos
 * Python 3.11+
