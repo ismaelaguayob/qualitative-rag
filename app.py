@@ -2,9 +2,14 @@ import streamlit as st
 import os
 import shutil
 import re
+import json
+from collections import Counter, defaultdict
 from dotenv import load_dotenv
 import chromadb
 import time
+import traceback
+import numpy as np
+import hashlib
 from llama_index.core import (
     VectorStoreIndex,
     SimpleDirectoryReader,
@@ -15,8 +20,11 @@ from llama_index.core import (
 from llama_index.core.llms import ChatMessage
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
-from llama_index.llms.google_genai import GoogleGenAI
-from llama_index.embeddings.huggingface_api import HuggingFaceInferenceAPIEmbedding
+from llama_index.llms.groq import Groq
+from llama_index.embeddings.voyageai import VoyageEmbedding
+from sklearn.cluster import KMeans
+from sklearn.feature_extraction.text import TfidfVectorizer
+from stop_words import get_stop_words as get_lang_stop_words
 
 # Load environment variables
 load_dotenv()
@@ -27,6 +35,8 @@ DATA_TEMP_PATH = "./data_temp"
 DATOS_DIR = os.path.join(DATA_TEMP_PATH, "datos")
 ANTECEDENTES_DIR = os.path.join(DATA_TEMP_PATH, "antecedentes")
 EXTRACTED_TEXT_DIR = os.path.join(DATA_TEMP_PATH, "extracted_text")
+DEBUG_DIR = os.path.join(DATA_TEMP_PATH, "debug")
+DEV_LOGS_DIR = os.path.join(DATA_TEMP_PATH, "dev_sessions")
 
 # --- i18n: Internationalization ---
 I18N = {
@@ -34,6 +44,7 @@ I18N = {
         "page_title": "Conversando con Datos Cualitativos",
         "sidebar_header": "Configuración del Investigador",
         "model_selector": "Selector de Modelo",
+        "api_key_error": "Por favor configura GROQ_KEY en el archivo .env",
         "discipline": "Disciplina",
         "perspective": "Perspectiva Teórica",
         "topic": "Tema de Investigación",
@@ -63,9 +74,10 @@ I18N = {
         "indices_failed": "Fallo al crear índices.",
         "indices_reset": "Índices reiniciados. Puedes subir nuevos archivos.",
         "processing": "Procesando archivos e índices...",
-        "api_key_error": "Por favor configura GOOGLE_API_KEY en el archivo .env",
         "language": "Idioma",
         "advanced_settings": "⚙️ Ajustes Avanzados",
+        "topic_k": "Número de tópicos (K)",
+        "topic_k_help": "Cantidad de clusters temáticos para sugerencias.",
         "chunk_size": "Tamaño de Chunk (caracteres)",
         "chunk_overlap": "Overlap de Chunk (caracteres)",
         "top_k_data": "Top-K Datos Empíricos",
@@ -74,6 +86,8 @@ I18N = {
         "chunk_overlap_help": "Solapamiento entre chunks. Mayor = menos pérdida de contexto.",
         "top_k_help": "Cantidad de fragmentos a recuperar por consulta.",
         "settings_note": "⚠️ Reinicializa los índices después de cambiar estos valores.",
+        "suggestions_title": "Sugerencias de preguntas",
+        "suggestion_button": "➕ Usar sugerencia",
         "system_prompt": """Eres un investigador experto con un Doctorado en {discipline}.
 Estás analizando fuentes primarias desde una perspectiva {perspective}.
 Tu tema de investigación actual es: {topic}.
@@ -111,6 +125,7 @@ RESPUESTA:"""
         "page_title": "Conversing with Qualitative Data",
         "sidebar_header": "Researcher Configuration",
         "model_selector": "Model Selector",
+        "api_key_error": "Please set GROQ_KEY in the .env file",
         "discipline": "Discipline",
         "perspective": "Theoretical Perspective",
         "topic": "Research Topic",
@@ -140,9 +155,10 @@ RESPUESTA:"""
         "indices_failed": "Failed to create indices.",
         "indices_reset": "Indices reset. You can upload new files.",
         "processing": "Processing files and indices...",
-        "api_key_error": "Please set GOOGLE_API_KEY in the .env file",
         "language": "Language",
         "advanced_settings": "⚙️ Advanced Settings",
+        "topic_k": "Number of topics (K)",
+        "topic_k_help": "Number of thematic clusters for suggestions.",
         "chunk_size": "Chunk Size (characters)",
         "chunk_overlap": "Chunk Overlap (characters)",
         "top_k_data": "Top-K Empirical Data",
@@ -151,6 +167,8 @@ RESPUESTA:"""
         "chunk_overlap_help": "Overlap between chunks. Higher = less context loss.",
         "top_k_help": "Number of fragments to retrieve per query.",
         "settings_note": "⚠️ Reinitialize indices after changing these values.",
+        "suggestions_title": "Suggested questions",
+        "suggestion_button": "➕ Use suggestion",
         "system_prompt": """You are an expert researcher with a PhD in {discipline}.
 You are analyzing primary sources from a {perspective} perspective.
 Your current research topic is: {topic}.
@@ -197,23 +215,119 @@ def get_text(key, lang="es", **kwargs):
 os.makedirs(DATOS_DIR, exist_ok=True)
 os.makedirs(ANTECEDENTES_DIR, exist_ok=True)
 os.makedirs(EXTRACTED_TEXT_DIR, exist_ok=True)
+os.makedirs(DEBUG_DIR, exist_ok=True)
+os.makedirs(DEV_LOGS_DIR, exist_ok=True)
+
+def _append_log(log_path, message):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {message}\n")
+
+def log_topic_event(message):
+    _append_log(os.path.join(DEBUG_DIR, "topic_log.txt"), message)
+
+def log_bug_event(message):
+    _append_log(os.path.join(DEBUG_DIR, "bug_log.txt"), message)
+
+def init_dev_session_log():
+    today = time.strftime("%Y-%m-%d")
+    log_path = os.path.join(DEV_LOGS_DIR, f"{today}.md")
+    if not os.path.exists(log_path):
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(f"# Avances de Desarrollo - {today}\n\n")
+            f.write("## Features implementadas\n- \n\n")
+            f.write("## Por hacer\n- \n")
+    return log_path
+
+def append_dev_session_entry(feature, done_items=None, todo_items=None):
+    log_path = init_dev_session_log()
+    done_items = done_items or []
+    todo_items = todo_items or []
+    with open(log_path, "a", encoding="utf-8") as f:
+        if feature:
+            f.write(f"\n### {feature}\n")
+        if done_items:
+            f.write("**Features implementadas**\n")
+            for item in done_items:
+                f.write(f"- {item}\n")
+        if todo_items:
+            f.write("**Por hacer**\n")
+            for item in todo_items:
+                f.write(f"- {item}\n")
+
+init_dev_session_log()
+
+SPANISH_STOP_WORDS = {
+    "de", "la", "que", "el", "en", "y", "a", "los", "del", "se", "las", "por",
+    "un", "para", "con", "no", "una", "su", "al", "lo", "como", "más", "pero",
+    "sus", "le", "ya", "o", "este", "sí", "porque", "esta", "entre", "cuando",
+    "muy", "sin", "sobre", "también", "me", "hasta", "hay", "donde", "quien",
+    "desde", "todo", "nos", "durante", "todos", "uno", "les", "ni", "contra",
+    "otros", "ese", "eso", "ante", "ellos", "e", "esto", "mí", "antes", "algunos",
+    "qué", "unos", "yo", "otro", "otras", "otra", "él", "tanto", "esa", "estos",
+    "mucho", "quienes", "nada", "muchos", "cual", "poco", "ella", "estar",
+    "estas", "algunas", "algo", "nosotros", "mi", "mis", "tú", "te", "ti", "tu",
+    "tus", "ellas", "nosotras", "vosotros", "vosotras", "os", "mío", "mía",
+    "míos", "mías", "tuyo", "tuya", "tuyos", "tuyas", "suyo", "suya", "suyos",
+    "suyas", "nuestro", "nuestra", "nuestros", "nuestras", "vuestro", "vuestra",
+    "vuestros", "vuestras", "esos", "esas", "estoy", "estás", "está", "estamos",
+    "estáis", "están", "esté", "estés", "estemos", "estéis", "estén", "estaré",
+    "estarás", "estará", "estaremos", "estaréis", "estarán"
+}
+
+DEFAULT_STOP_WORD_LANG = "spanish"
+
+def get_stop_words(lang):
+    if lang == "en":
+        base = get_lang_stop_words("english")
+    else:
+        base = get_lang_stop_words(DEFAULT_STOP_WORD_LANG)
+    return list(set(base + list(SPANISH_STOP_WORDS)))
+
+try:
+    voyage_key = os.getenv("VOYAGE_KEY")
+    if not voyage_key:
+        st.warning("VOYAGE_KEY no encontrado en .env. Embeddings pueden fallar.")
+        log_bug_event("VOYAGE_KEY missing; embeddings may fail.")
+
+    primary_model = "voyage-3-large"
+    fallback_model = "voyage-3.5"
+    fallback_model_lite = "voyage-3.5-lite"
+
+    try:
+        Settings.embed_model = VoyageEmbedding(
+            model_name=primary_model,
+            voyage_api_key=voyage_key,
+            truncation=True,
+            embed_batch_size=256
+        )
+    except Exception as primary_error:
+        log_bug_event(f"Primary embedding init failed: {primary_error}")
+        log_bug_event(traceback.format_exc())
+        try:
+            Settings.embed_model = VoyageEmbedding(
+                model_name=fallback_model,
+                voyage_api_key=voyage_key,
+                truncation=True,
+                embed_batch_size=256
+            )
+        except Exception as fallback_error:
+            log_bug_event(f"Fallback embedding init failed: {fallback_error}")
+            log_bug_event(traceback.format_exc())
+            Settings.embed_model = VoyageEmbedding(
+                model_name=fallback_model_lite,
+                voyage_api_key=voyage_key,
+                truncation=True,
+                embed_batch_size=256
+            )
+except Exception as e:
+    log_bug_event(f"Embedding model init failed: {e}")
+    log_bug_event(traceback.format_exc())
+    st.error(f"Error initializing Embedding Model: {e}")
 
 # LlamaIndex Settings
 Settings.chunk_size = 1024
 Settings.chunk_overlap = 200
-
-try:
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        st.warning("HF_TOKEN no encontrado en .env. Embeddings pueden fallar.")
-    
-    Settings.embed_model = HuggingFaceInferenceAPIEmbedding(
-        model_name="intfloat/multilingual-e5-large",
-        token=hf_token,
-        timeout=60
-    )
-except Exception as e:
-    st.error(f"Error initializing Embedding Model: {e}")
 
 # --- Helper Functions ---
 
@@ -264,6 +378,374 @@ def format_text_for_display(text):
     # Convert paragraph breaks to <br><br>
     return text.replace("\n\n", "<br><br>").replace("\n", "<br>")
 
+def extract_topic_keywords(documents, topic_ids, lang, top_n=8):
+    """Compute top keywords per topic using TF-IDF over topic-concatenated texts."""
+    topic_texts = defaultdict(list)
+    for doc_text, topic_id in zip(documents, topic_ids):
+        if doc_text:
+            topic_texts[topic_id].append(doc_text)
+
+    topic_keywords = {}
+    for topic_id, texts in topic_texts.items():
+        corpus = ["\n".join(texts)]
+        vectorizer = TfidfVectorizer(
+            stop_words=get_stop_words(lang),
+            ngram_range=(1, 3),
+            max_features=4000
+        )
+        tfidf = vectorizer.fit_transform(corpus)
+        if tfidf.shape[1] == 0:
+            topic_keywords[topic_id] = []
+            continue
+        scores = tfidf.toarray()[0]
+        terms = np.array(vectorizer.get_feature_names_out())
+        top_indices = scores.argsort()[::-1][:top_n]
+        topic_keywords[topic_id] = [terms[i] for i in top_indices if scores[i] > 0]
+    return topic_keywords
+
+def build_topics_for_collection(chroma_collection, topic_k, lang):
+    """Cluster embeddings with K-means and persist topic metadata in Chroma."""
+    payload = chroma_collection.get(include=["embeddings", "documents", "metadatas"])
+    embeddings = payload.get("embeddings", None)
+    ids = payload.get("ids", None)
+    documents = payload.get("documents", None)
+    metadatas = payload.get("metadatas", None)
+
+    embeddings = embeddings if embeddings is not None else []
+    ids = ids if ids is not None else []
+    documents = documents if documents is not None else []
+    metadatas = metadatas if metadatas is not None else []
+
+    if len(embeddings) < 2:
+        return 0
+
+    k = min(topic_k, len(embeddings))
+    if k < 2:
+        return 0
+
+    kmeans = KMeans(n_clusters=k, n_init="auto", random_state=42)
+    topic_ids = kmeans.fit_predict(np.array(embeddings))
+
+    topic_keywords = extract_topic_keywords(documents, topic_ids, lang)
+    updated_metadatas = []
+    for metadata, topic_id in zip(metadatas, topic_ids):
+        new_metadata = dict(metadata or {})
+        new_metadata["topic_id"] = int(topic_id)
+        keywords = topic_keywords.get(int(topic_id), [])
+        new_metadata["topic_keywords"] = ", ".join(keywords)
+        if "topic_label" not in new_metadata:
+            new_metadata["topic_label"] = ""
+        updated_metadatas.append(new_metadata)
+
+    chroma_collection.update(ids=ids, metadatas=updated_metadatas)
+
+    topic_counts = Counter(topic_ids)
+    top_topics = topic_counts.most_common(5)
+    keyword_preview = {
+        int(topic_id): topic_keywords.get(int(topic_id), [])[:3]
+        for topic_id, _ in top_topics
+    }
+    log_topic_event(
+        "Topics built for collection "
+        f"{chroma_collection.name} with k={k} on {len(ids)} docs. "
+        f"Top topics: {top_topics}. Keywords: {keyword_preview}"
+    )
+    return k
+
+def parse_json_response(text):
+    """Parse JSON from model response with basic recovery."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return None
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+
+def update_topic_labels(chroma_collection, topic_id_to_label):
+    """Persist generated topic labels to all docs in the topic."""
+    for topic_id, topic_label in topic_id_to_label.items():
+        if not topic_label:
+            continue
+        results = chroma_collection.get(
+            where={"topic_id": int(topic_id)},
+            include=["metadatas"]
+        )
+        ids = results.get("ids", [])
+        metadatas = results.get("metadatas", [])
+        if not ids:
+            continue
+        updated = []
+        for metadata in metadatas:
+            new_metadata = dict(metadata or {})
+            new_metadata["topic_label"] = topic_label
+            updated.append(new_metadata)
+        chroma_collection.update(ids=ids, metadatas=updated)
+
+def generate_bootstrap_suggestions(context_text, llm_suggest, chroma_collection, lang):
+    """Generate suggestions before any user query using top topics."""
+    payload = chroma_collection.get(include=["metadatas", "documents"])
+    metadatas = payload.get("metadatas", []) or []
+    documents = payload.get("documents", []) or []
+
+    topic_docs = defaultdict(list)
+    topic_meta = {}
+    for meta, doc in zip(metadatas, documents):
+        meta = meta or {}
+        topic_id = meta.get("topic_id")
+        if topic_id is None:
+            continue
+        topic_id = int(topic_id)
+        topic_docs[topic_id].append(doc)
+        if topic_id not in topic_meta:
+            topic_meta[topic_id] = {
+                "topic_id": topic_id,
+                "topic_label": meta.get("topic_label", "").strip(),
+                "topic_keywords": meta.get("topic_keywords", "").strip()
+            }
+
+    if not topic_docs:
+        log_topic_event("Bootstrap suggestions skipped: no topics in collection.")
+        return []
+
+    top_topics = sorted(topic_docs.keys(), key=lambda k: len(topic_docs[k]), reverse=True)[:3]
+    topic_payload = []
+    for topic_id in top_topics:
+        snippets = []
+        for doc in topic_docs[topic_id][:2]:
+            if doc:
+                snippets.append(normalize_extracted_text(doc)[:400])
+        meta = topic_meta.get(topic_id, {})
+        topic_payload.append({
+            "topic_id": topic_id,
+            "topic_label": meta.get("topic_label", ""),
+            "topic_keywords": meta.get("topic_keywords", ""),
+            "snippets": snippets
+        })
+
+    system_prompt = (
+        "Eres un asistente que genera sugerencias de investigación. "
+        "Responde SOLO en JSON válido. No incluyas texto adicional."
+    )
+    user_prompt = {
+        "task": "bootstrap_suggest",
+        "user_query": context_text,
+        "topics": topic_payload,
+        "instructions": (
+            "Genera 3-6 preguntas sugeridas relevantes al contexto y a los tópicos. "
+            "No repitas preguntas. Responde en JSON con 'suggestions'."
+        ),
+        "constraints": [
+            "No hables como si fueras una persona entrevistada.",
+            "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
+            "Formula preguntas como investigador/a (tercera persona)."
+        ],
+        "schema": {
+            "suggestions": [{
+                "id": "string",
+                "text": "string",
+                "topic_id": "int",
+                "topic_label": "string",
+                "source_chunk_ids": ["string"]
+            }]
+        }
+    }
+
+    response = llm_suggest.complete(json.dumps(user_prompt, ensure_ascii=False))
+    response_text = response.text.strip()
+    payload = parse_json_response(response_text)
+    if not payload:
+        log_bug_event("Bootstrap suggestion JSON parse failed.")
+        log_bug_event(f"Bootstrap raw response: {response_text[:2000]}")
+        return []
+
+    suggestions = payload.get("suggestions", [])
+    log_topic_event(
+        f"Bootstrap suggestion raw count={len(suggestions)}; keys={list(payload.keys())}"
+    )
+    log_topic_event(f"Bootstrap suggestions generated: {len(suggestions)}")
+    normalized = []
+    for item in suggestions:
+        text = (item.get("text") or "").strip()
+        if not text:
+            continue
+        normalized.append({
+            "id": item.get("id") or f"s{len(normalized)+1}",
+            "text": text,
+            "topic_id": item.get("topic_id"),
+            "topic_label": item.get("topic_label"),
+            "source_chunk_ids": item.get("source_chunk_ids", [])
+        })
+    return normalized
+
+def generate_suggestions(user_query, nodes_datos, llm_suggest, chroma_collection, lang):
+    """Generate topic-aware query suggestions and update labels if needed."""
+    topic_counter = Counter()
+    topic_data = {}
+    topic_to_chunks = defaultdict(list)
+    missing_topic_nodes = 0
+
+    for node in nodes_datos:
+        metadata = node.metadata or {}
+        topic_id = metadata.get("topic_id")
+        if topic_id is None:
+            node_id = getattr(node, "node_id", None)
+            if node_id is None and hasattr(node, "node"):
+                node_id = getattr(node.node, "node_id", None)
+            if node_id:
+                try:
+                    fetched = chroma_collection.get(ids=[node_id], include=["metadatas"])
+                    fetched_meta = (fetched.get("metadatas") or [])
+                    if fetched_meta:
+                        metadata = fetched_meta[0] or metadata
+                        topic_id = metadata.get("topic_id")
+                except Exception as e:
+                    log_bug_event(f"Chroma metadata fetch failed for node {node_id}: {e}")
+            if topic_id is None:
+                missing_topic_nodes += 1
+                continue
+        topic_id = int(topic_id)
+        topic_counter[topic_id] += 1
+        topic_to_chunks[topic_id].append(node)
+        if topic_id not in topic_data:
+            topic_data[topic_id] = {
+                "topic_id": topic_id,
+                "topic_label": metadata.get("topic_label", "").strip(),
+                "topic_keywords": metadata.get("topic_keywords", "").strip()
+            }
+
+    if not topic_counter:
+        sample_metadata = {}
+        if nodes_datos:
+            sample_metadata = nodes_datos[0].metadata or {}
+        log_topic_event(
+            "No topics found in retrieved nodes for suggestions. "
+            f"nodes={len(nodes_datos)} missing_topic_nodes={missing_topic_nodes} "
+            f"sample_metadata_keys={list(sample_metadata.keys())}"
+        )
+        return []
+
+    top_topics = [topic_id for topic_id, _ in topic_counter.most_common(3)]
+    selected_topics = [topic_data[t] for t in top_topics if t in topic_data]
+
+    topics_missing_label = [
+        topic for topic in selected_topics if not topic.get("topic_label")
+    ]
+
+    topic_payload = []
+    for topic in selected_topics:
+        samples = topic_to_chunks.get(topic["topic_id"], [])[:2]
+        snippets = [normalize_extracted_text(s.text)[:400] for s in samples if s.text]
+        topic_payload.append({
+            "topic_id": topic["topic_id"],
+            "topic_label": topic.get("topic_label", ""),
+            "topic_keywords": topic.get("topic_keywords", ""),
+            "snippets": snippets
+        })
+
+    system_prompt = (
+        "Eres un asistente que genera sugerencias de investigación. "
+        "Responde SOLO en JSON válido. No incluyas texto adicional."
+    )
+
+    if topics_missing_label:
+        user_prompt = {
+            "task": "label_and_suggest",
+            "user_query": user_query,
+            "topics": topic_payload,
+            "instructions": (
+                "1) Para cada tópico sin 'topic_label', crea un nombre general y comprensivo. "
+                "2) Genera 3-6 preguntas sugeridas relevantes al user_query y a los tópicos. "
+                "3) No repitas preguntas. Responde en JSON con 'topic_labels' y 'suggestions'."
+            ),
+            "constraints": [
+                "No hables como si fueras una persona entrevistada.",
+                "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
+                "Formula preguntas como investigador/a (tercera persona)."
+            ],
+            "schema": {
+                "topic_labels": [{"topic_id": "int", "topic_label": "string"}],
+                "suggestions": [{
+                    "id": "string",
+                    "text": "string",
+                    "topic_id": "int",
+                    "topic_label": "string",
+                    "source_chunk_ids": ["string"]
+                }]
+            }
+        }
+    else:
+        user_prompt = {
+            "task": "suggest_only",
+            "user_query": user_query,
+            "topics": topic_payload,
+            "instructions": (
+                "Genera 3-6 preguntas sugeridas relevantes al user_query y a los tópicos. "
+                "No repitas preguntas. Responde en JSON con 'suggestions'."
+            ),
+            "constraints": [
+                "No hables como si fueras una persona entrevistada.",
+                "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
+                "Formula preguntas como investigador/a (tercera persona)."
+            ],
+            "schema": {
+                "suggestions": [{
+                    "id": "string",
+                    "text": "string",
+                    "topic_id": "int",
+                    "topic_label": "string",
+                    "source_chunk_ids": ["string"]
+                }]
+            }
+        }
+
+    response = llm_suggest.complete(json.dumps(user_prompt, ensure_ascii=False))
+    response_text = response.text.strip()
+    payload = parse_json_response(response_text)
+    if not payload:
+        log_bug_event("Suggestion model returned invalid JSON.")
+        log_topic_event("Suggestion generation failed to parse JSON response.")
+        log_bug_event(f"Suggestion raw response: {response_text[:2000]}")
+        return []
+
+    if topics_missing_label:
+        topic_labels = payload.get("topic_labels", [])
+        labels_map = {
+            int(item.get("topic_id")): item.get("topic_label", "").strip()
+            for item in topic_labels if item.get("topic_id") is not None
+        }
+        update_topic_labels(chroma_collection, labels_map)
+        if labels_map:
+            log_topic_event(f"Updated topic labels: {labels_map}")
+
+    suggestions = payload.get("suggestions", [])
+    log_topic_event(
+        f"Suggestion raw count={len(suggestions)}; keys={list(payload.keys())}"
+    )
+    if not suggestions:
+        log_topic_event("Suggestion payload empty; no suggestions returned by model.")
+        log_bug_event(f"Suggestion payload empty. Raw response: {response_text[:2000]}")
+    log_topic_event(
+        f"Suggestions generated: {len(suggestions)} for query='{user_query[:80]}' "
+        f"topics={top_topics}"
+    )
+    normalized = []
+    for item in suggestions:
+        text = (item.get("text") or "").strip()
+        if not text:
+            continue
+        normalized.append({
+            "id": item.get("id") or f"s{len(normalized)+1}",
+            "text": text,
+            "topic_id": item.get("topic_id"),
+            "topic_label": item.get("topic_label"),
+            "source_chunk_ids": item.get("source_chunk_ids", [])
+        })
+    return normalized
+
 def get_chroma_client():
     """Get or create the ChromaDB client stored in session state."""
     if 'chroma_client' not in st.session_state:
@@ -305,6 +787,8 @@ def try_restore_indices():
         
         return True
     except Exception as e:
+        log_bug_event(f"Index restore failed: {e}")
+        log_bug_event(traceback.format_exc())
         # Silent fail - user can manually initialize
         return False
 
@@ -351,11 +835,16 @@ def initialize_indices():
                 f.write(content)
         
         if not datos_docs:
-             index_datos = VectorStoreIndex.from_documents([], storage_context=storage_context_datos)
+            index_datos = VectorStoreIndex.from_documents([], storage_context=storage_context_datos)
         else:
-            index_datos = VectorStoreIndex.from_documents(
-                datos_docs, storage_context=storage_context_datos
-            )
+            try:
+                index_datos = VectorStoreIndex.from_documents(
+                    datos_docs, storage_context=storage_context_datos
+                )
+            except Exception as e:
+                log_bug_event(f"Index build failed for datos: {e}")
+                log_bug_event(traceback.format_exc())
+                raise
 
         # 2. Index B [ANTECEDENTES]
         chroma_collection_antecedentes = db.get_or_create_collection("index_antecedentes")
@@ -378,15 +867,22 @@ def initialize_indices():
                 f.write(content)
         
         if not antecedentes_docs:
-             index_antecedentes = VectorStoreIndex.from_documents([], storage_context=storage_context_antecedentes)
+            index_antecedentes = VectorStoreIndex.from_documents([], storage_context=storage_context_antecedentes)
         else:
-             index_antecedentes = VectorStoreIndex.from_documents(
-                antecedentes_docs, storage_context=storage_context_antecedentes
-            )
+            try:
+                index_antecedentes = VectorStoreIndex.from_documents(
+                    antecedentes_docs, storage_context=storage_context_antecedentes
+                )
+            except Exception as e:
+                log_bug_event(f"Index build failed for antecedentes: {e}")
+                log_bug_event(traceback.format_exc())
+                raise
             
         return index_datos, index_antecedentes, len(datos_docs), len(antecedentes_docs)
 
     except Exception as e:
+        log_bug_event(f"Initialize indices failed: {e}")
+        log_bug_event(traceback.format_exc())
         st.error(f"Error initializing indices: {e}")
         return None, None, 0, 0
 
@@ -415,6 +911,8 @@ def reset_indices_in_session():
         
         return True
     except Exception as e:
+        log_bug_event(f"Reset indices failed: {e}")
+        log_bug_event(traceback.format_exc())
         st.error(f"Error resetting indices: {e}")
         return False
 
@@ -447,8 +945,13 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
     
     # Use i18n bridge prompt
     bridge_prompt = get_text("bridge_prompt", lang, query=user_query, context=contexto_datos_str)
-    query_teorica_resp = llm_bridge.complete(bridge_prompt)
-    query_teorica = query_teorica_resp.text.strip()
+    try:
+        query_teorica_resp = llm_bridge.complete(bridge_prompt)
+        query_teorica = query_teorica_resp.text.strip()
+    except Exception as e:
+        log_bug_event(f"Bridge LLM call failed: {e}")
+        log_bug_event(traceback.format_exc())
+        raise
     
     # Debug Logging
     debug_dir = os.path.join(DATA_TEMP_PATH, "debug")
@@ -496,8 +999,13 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
         ChatMessage(role="user", content=user_content_final)
     ]
 
-    response = llm_main.chat(messages)
-    response_text = response.message.content
+    try:
+        response = llm_main.chat(messages)
+        response_text = response.message.content
+    except Exception as e:
+        log_bug_event(f"Main LLM call failed: {e}")
+        log_bug_event(traceback.format_exc())
+        raise
     
     # Debug Logging - Model Response
     with open(os.path.join(debug_dir, "response_log.txt"), "a") as f:
@@ -505,7 +1013,7 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
         f.write(f"Query: {user_query}\n")
         f.write(f"---\n{response_text}\n\n")
     
-    return response_text, evidence_datos, evidence_antecedentes, query_teorica
+    return response_text, evidence_datos, evidence_antecedentes, query_teorica, nodes_datos
 
 # --- Streamlit UI ---
 
@@ -540,7 +1048,7 @@ with st.sidebar:
     
     model_option = st.selectbox(
         t("model_selector"),
-        ("gemini-2.5-flash-lite", "gemini-3-flash-preview", "gemini-3-pro-preview")
+        ("moonshotai/kimi-k2-instruct-0905", "openai/gpt-oss-120b")
     )
     
     disciplina = st.text_input(t("discipline"), "Sociología" if lang == "es" else "Sociology")
@@ -560,7 +1068,15 @@ with st.sidebar:
             st.session_state.top_k_data = 7
         if "top_k_theory" not in st.session_state:
             st.session_state.top_k_theory = 5
-        
+        if "topic_k" not in st.session_state:
+            st.session_state.topic_k = 6
+
+        st.session_state.topic_k = st.slider(
+            t("topic_k"),
+            min_value=2, max_value=20,
+            value=st.session_state.topic_k,
+            help=t("topic_k_help")
+        )
         st.session_state.chunk_size = st.slider(
             t("chunk_size"), 
             min_value=256, max_value=2048, 
@@ -595,7 +1111,7 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         if st.button(t("init_indices")):
-            if not os.environ.get("GOOGLE_API_KEY"):
+            if not os.environ.get("GROQ_KEY"):
                 st.error(t("api_key_error"))
             else:
                 with st.spinner(t("processing")):
@@ -608,6 +1124,22 @@ with st.sidebar:
                     if index_datos and index_antecedentes:
                         st.session_state['index_datos'] = index_datos
                         st.session_state['index_antecedentes'] = index_antecedentes
+                        db = get_chroma_client()
+                        try:
+                            collection_datos = db.get_collection("index_datos")
+                            build_topics_for_collection(
+                                collection_datos,
+                                st.session_state.get("topic_k", 6),
+                                lang
+                            )
+                            # Refresh index to include updated metadata after topic build
+                            refreshed_store = ChromaVectorStore(chroma_collection=collection_datos)
+                            st.session_state["index_datos"] = VectorStoreIndex.from_vector_store(
+                                refreshed_store
+                            )
+                        except Exception as e:
+                            log_bug_event(f"Topic build failed: {e}")
+                            st.warning(f"No se pudo crear tópicos: {e}")
                         st.success(t("indices_created", d=count_d, a=count_a))
                     else:
                         st.error(t("indices_failed"))
@@ -646,6 +1178,42 @@ st.title(t("main_title"))
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "pending_query" not in st.session_state:
+    st.session_state.pending_query = None
+if "last_suggestions" not in st.session_state:
+    st.session_state.last_suggestions = []
+if "hide_suggestions" not in st.session_state:
+    st.session_state.hide_suggestions = False
+
+if not st.session_state.messages and not st.session_state.pending_query:
+    try:
+        db = get_chroma_client()
+        collection_datos = db.get_collection("index_datos")
+        llm_bootstrap = Groq(model="openai/gpt-oss-20b", api_key=os.getenv("GROQ_KEY"))
+        bootstrap_context = f"{tema} | {perspectiva} | {disciplina}"
+        st.session_state.last_suggestions = generate_bootstrap_suggestions(
+            bootstrap_context,
+            llm_bootstrap,
+            collection_datos,
+            lang
+        )
+    except Exception as e:
+        log_bug_event(f"Bootstrap suggestions failed: {e}")
+
+def set_pending_query(label, source):
+    st.session_state.pending_query = label
+    st.session_state.pending_query_source = source
+    st.session_state.hide_suggestions = True
+    st.session_state.last_suggestions = []
+    log_topic_event(f"Suggestion clicked ({source}): '{label[:80]}'")
+
+pending_used = False
+if st.session_state.pending_query:
+    prompt = st.session_state.pending_query
+    pending_used = True
+    log_topic_event(f"Pending query consumed: '{prompt[:80]}'")
+else:
+    prompt = st.chat_input(t("chat_placeholder"))
 
 
 def render_evidence_item(item, idx, prefix, lang):
@@ -690,8 +1258,26 @@ for msg_idx, message in enumerate(st.session_state.messages):
                     for i, item in enumerate(message["evidence"]["antecedentes"]):
                         render_evidence_item(item, i, f"hist_{msg_idx}_ante", lang)
 
-# Chat Input
-if prompt := st.chat_input(t("chat_placeholder")):
+# Suggestions (bootstrap / latest)
+if st.session_state.last_suggestions and not st.session_state.hide_suggestions:
+    st.subheader(t("suggestions_title"))
+    for idx, suggestion in enumerate(st.session_state.last_suggestions):
+        label = suggestion.get("text") or ""
+        if not label:
+            continue
+        label_hash = hashlib.md5(label.encode("utf-8")).hexdigest()[:8]
+        btn_key = f"boot_suggest_{idx}_{label_hash}"
+        st.button(
+            label,
+            key=btn_key,
+            use_container_width=True,
+            on_click=set_pending_query,
+            args=(label, "bootstrap")
+        )
+
+if prompt:
+    if pending_used:
+        st.session_state.pending_query = None
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -701,25 +1287,70 @@ if prompt := st.chat_input(t("chat_placeholder")):
     else:
         with st.chat_message("assistant"):
             with st.spinner(t("analyzing")):
-                llm_main = GoogleGenAI(model=model_option)
-                llm_bridge = GoogleGenAI(model="gemma-3-27b-it")
+                groq_key = os.getenv("GROQ_KEY")
+                llm_main = Groq(model=model_option, api_key=groq_key)
+                llm_bridge = Groq(model="openai/gpt-oss-20b", api_key=groq_key)
+                llm_suggest = Groq(model="openai/gpt-oss-20b", api_key=groq_key)
                 
                 chat_history_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-4:]])
 
-                response_text, ev_datos, ev_ante, q_teo = run_sociological_pipeline(
-                    prompt, 
-                    chat_history_str, 
-                    st.session_state['index_datos'], 
-                    st.session_state['index_antecedentes'],
-                    llm_main,
-                    llm_bridge,
-                    disciplina,
-                    perspectiva,
-                    tema,
-                    lang  # Pass language to pipeline
-                )
+                try:
+                    response_text, ev_datos, ev_ante, q_teo, nodes_datos = run_sociological_pipeline(
+                        prompt, 
+                        chat_history_str, 
+                        st.session_state['index_datos'], 
+                        st.session_state['index_antecedentes'],
+                        llm_main,
+                        llm_bridge,
+                        disciplina,
+                        perspectiva,
+                        tema,
+                        lang  # Pass language to pipeline
+                    )
+                except Exception as e:
+                    log_bug_event(f"Pipeline failed: {e}")
+                    log_bug_event(traceback.format_exc())
+                    st.error("Ocurrió un error al procesar la consulta. Revisa el log de errores.")
+                    st.stop()
+
+                suggestions = []
+                try:
+                    db = get_chroma_client()
+                    collection_datos = db.get_collection("index_datos")
+                    log_topic_event(f"Generating suggestions for query='{prompt[:80]}' nodes={len(nodes_datos)}")
+                    suggestions = generate_suggestions(
+                        prompt,
+                        nodes_datos=nodes_datos,
+                        llm_suggest=llm_suggest,
+                        chroma_collection=collection_datos,
+                        lang=lang
+                    )
+                    st.session_state["last_suggestions"] = suggestions
+                    st.session_state.hide_suggestions = False
+                except Exception as e:
+                    log_bug_event(f"Suggestion generation failed: {e}")
+                    st.warning(f"No se pudieron generar sugerencias: {e}")
                 
                 st.markdown(response_text)
+
+                if suggestions:
+                    st.subheader(t("suggestions_title"))
+                    log_topic_event(f"Rendering {len(suggestions)} suggestions in UI.")
+                    for idx, suggestion in enumerate(suggestions):
+                        label = suggestion.get("text") or ""
+                        if not label:
+                            continue
+                        label_hash = hashlib.md5(label.encode("utf-8")).hexdigest()[:8]
+                        btn_key = f"suggest_{idx}_{label_hash}"
+                        st.button(
+                            label,
+                            key=btn_key,
+                            use_container_width=True,
+                            on_click=set_pending_query,
+                            args=(label, "post-response")
+                        )
+                else:
+                    log_topic_event("No suggestions to render in UI.")
                 
                 with st.expander(t("evidence_title")):
                     tab_datos, tab_teoria = st.tabs([t("tab_data"), t("tab_theory")])
@@ -741,4 +1372,3 @@ if prompt := st.chat_input(t("chat_placeholder")):
                         "query_teorica": q_teo
                     }
                 })
-

@@ -4,13 +4,13 @@ Herramienta de análisis cualitativo asistido por IA que permite "conversar" con
 
 ## Características
 * **Pipeline Secuencial**: Grounding (Datos) -> Bridging (Consulta Teórica) -> Theorizing (Literatura) -> Síntesis.
-* **Embeddings Serverless**: Usa la API de Hugging Face (`intfloat/multilingual-e5-large`) para evitar costos y cuotas.
+* **Embeddings Serverless**: Usa la API de VoyageAI (`voyage-3-large`) para evitar costos y cuotas.
 * **Trazabilidad**: Visualización transparente de la evidencia utilizada en cada paso.
 
 ## Requisitos
 * Python 3.11+
-* `google-generativeai` API Key (Gemini)
-* Hugging Face User Access Token (Gratuito)
+* Groq API Key
+* VoyageAI API Key (Gratuita)
 
 ## Instalación
 
@@ -28,8 +28,8 @@ pip install -r requirements.txt
 3. Configurar variables de entorno:
 Renombrar o crear un archivo `.env` y añadir claves:
 ```
-GOOGLE_API_KEY=tu_api_key_de_google
-HF_TOKEN=tu_token_de_hugging_face
+GROQ_KEY=tu_api_key_de_groq
+VOYAGE_KEY=tu_api_key_de_voyage
 ```
 
 ## Ejecución

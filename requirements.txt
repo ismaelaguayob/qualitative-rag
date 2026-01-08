@@ -1,7 +1,10 @@
 streamlit>=1.35.0
 llama-index>=0.10.30
-llama-index-llms-google-genai
+llama-index-llms-groq
 llama-index-vector-stores-chroma
-llama-index-embeddings-huggingface-api
+llama-index-embeddings-voyageai
 python-dotenv
 chromadb
+numpy
+scikit-learn
+stop-words
