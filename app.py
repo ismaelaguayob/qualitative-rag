@@ -11,6 +11,9 @@ import traceback
 import numpy as np
 import hashlib
 import sqlite3
+import logging
+import sys
+import warnings
 from llama_index.core import (
     VectorStoreIndex,
     SimpleDirectoryReader,
@@ -98,6 +101,25 @@ I18N = {
         "settings_note": "⚠️ Reinicializa los índices después de cambiar estos valores.",
         "suggestions_title": "Sugerencias de preguntas",
         "suggestion_button": "➕ Usar sugerencia",
+        "citations_title": "📌 Citas y Fuentes",
+        "citation_label": "Cita",
+        "citation_missing": "Fragmento no disponible para la cita {cite_id}.",
+        "citations_parse_error": "La respuesta con citas no se pudo parsear. Mostrando formato clásico.",
+        "citations_system_prompt": "Responde SOLO en JSON válido. No incluyas texto adicional fuera del JSON.",
+        "citations_user_instructions": (
+            "Usa SOLO los chunk_id disponibles en CATALOGO_CHUNKS_JSON. "
+            "Cada bloque debe citar 1+ citas. "
+            "Los labels deben usar títulos o nombres de archivo (no IDs crudos). "
+            "Responde en JSON con el siguiente esquema:\n"
+            "{\n"
+            "  \"answer_blocks\": [{\"id\": \"string\", \"type\": \"paragraph|list\", \"text\": \"string\", \"citations\": [\"c1\"]}],\n"
+            "  \"citations\": [{\"id\": \"c1\", \"label\": \"string\", \"chunk_ids\": [\"chunk_id\"]}],\n"
+            "  \"sources\": [{\"chunk_id\": \"chunk_id\", \"source_type\": \"data|theory\"}]\n"
+            "}"
+        ),
+        "page_label": "p.",
+        "source_type_data": "Datos",
+        "source_type_theory": "Antecedentes",
         "system_prompt": """Eres un investigador experto con un Doctorado en {discipline}.
 Estás analizando fuentes primarias desde una perspectiva {perspective}.
 Tu tema de investigación actual es: {topic}.
@@ -188,6 +210,25 @@ RESPUESTA:"""
         "settings_note": "⚠️ Reinitialize indices after changing these values.",
         "suggestions_title": "Suggested questions",
         "suggestion_button": "➕ Use suggestion",
+        "citations_title": "📌 Citations & Sources",
+        "citation_label": "Citation",
+        "citation_missing": "Chunk not available for citation {cite_id}.",
+        "citations_parse_error": "Could not parse structured citations. Showing classic format.",
+        "citations_system_prompt": "Respond ONLY with valid JSON. Do not include any extra text outside the JSON.",
+        "citations_user_instructions": (
+            "Use ONLY chunk_id values available in CATALOGO_CHUNKS_JSON. "
+            "Each block must cite 1+ citations. "
+            "Labels must use titles or file names (no raw IDs). "
+            "Respond in JSON with this schema:\n"
+            "{\n"
+            "  \"answer_blocks\": [{\"id\": \"string\", \"type\": \"paragraph|list\", \"text\": \"string\", \"citations\": [\"c1\"]}],\n"
+            "  \"citations\": [{\"id\": \"c1\", \"label\": \"string\", \"chunk_ids\": [\"chunk_id\"]}],\n"
+            "  \"sources\": [{\"chunk_id\": \"chunk_id\", \"source_type\": \"data|theory\"}]\n"
+            "}"
+        ),
+        "page_label": "p.",
+        "source_type_data": "Data",
+        "source_type_theory": "Background",
         "system_prompt": """You are an expert researcher with a PhD in {discipline}.
 You are analyzing primary sources from a {perspective} perspective.
 Your current research topic is: {topic}.
@@ -248,6 +289,31 @@ def log_topic_event(message):
 def log_bug_event(message):
     _append_log(os.path.join(DEBUG_DIR, "bug_log.txt"), message)
 
+def setup_logging():
+    log_path = os.path.join(DEBUG_DIR, "bug_log.txt")
+    logger = logging.getLogger()
+    if not any(
+        isinstance(handler, logging.FileHandler)
+        and getattr(handler, "baseFilename", None) == os.path.abspath(log_path)
+        for handler in logger.handlers
+    ):
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+        formatter = logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+    def _showwarning(message, category, filename, lineno, file=None, line=None):
+        log_bug_event(f"{category.__name__}: {message} ({filename}:{lineno})")
+
+    warnings.showwarning = _showwarning
+
+    def _excepthook(exc_type, exc, tb):
+        log_bug_event(f"Uncaught {exc_type.__name__}: {exc}")
+        log_bug_event("".join(traceback.format_tb(tb)))
+
+    sys.excepthook = _excepthook
+
 def init_dev_session_log():
     today = time.strftime("%Y-%m-%d")
     log_path = os.path.join(DEV_LOGS_DIR, f"{today}.md")
@@ -275,6 +341,7 @@ def append_dev_session_entry(feature, done_items=None, todo_items=None):
                 f.write(f"- {item}\n")
 
 init_dev_session_log()
+setup_logging()
 
 SPANISH_STOP_WORDS = {
     "de", "la", "que", "el", "en", "y", "a", "los", "del", "se", "las", "por",
@@ -483,6 +550,93 @@ def parse_json_response(text):
             return json.loads(match.group(0))
         except json.JSONDecodeError:
             return None
+
+
+def chunk_meta_from_node(node):
+    """Normalize node metadata for citations."""
+    metadata = node.metadata or {}
+    node_id = getattr(node, "node_id", None)
+    if node_id is None and hasattr(node, "node"):
+        node_id = getattr(node.node, "node_id", None)
+    return {
+        "chunk_id": node_id,
+        "doc_id": metadata.get("doc_id") or metadata.get("file_name"),
+        "title": metadata.get("title") or metadata.get("file_name"),
+        "page": metadata.get("page"),
+        "start_char": metadata.get("start_char"),
+        "end_char": metadata.get("end_char"),
+    }
+
+
+def extract_chunk_evidence(nodes):
+    """Build chunk evidence list from nodes."""
+    evidence = []
+    for node in nodes:
+        text = normalize_extracted_text(node.text)
+        snippet = text[:600] if text else ""
+        meta = chunk_meta_from_node(node)
+        meta["text"] = text
+        meta["text_snippet"] = snippet
+        evidence.append(meta)
+    return evidence
+
+
+def clip_text(text, limit=800):
+    if not text:
+        return ""
+    return text[:limit]
+
+
+def validate_citation_payload(payload, allowed_chunk_ids):
+    """Validate structured citation payload against retrieved chunks."""
+    if not isinstance(payload, dict):
+        return None
+    answer_blocks = payload.get("answer_blocks")
+    citations = payload.get("citations")
+    sources = payload.get("sources")
+    if not isinstance(answer_blocks, list) or not isinstance(citations, list):
+        return None
+
+    citation_map = {}
+    for item in citations:
+        cite_id = item.get("id")
+        chunk_ids = item.get("chunk_ids") or []
+        if not cite_id or not isinstance(chunk_ids, list):
+            continue
+        valid_chunks = [cid for cid in chunk_ids if cid in allowed_chunk_ids]
+        if not valid_chunks:
+            continue
+        citation_map[cite_id] = {
+            "chunk_ids": valid_chunks,
+            "label": item.get("label") or str(cite_id)
+        }
+
+    cleaned_blocks = []
+    for block in answer_blocks:
+        text = (block.get("text") or "").strip()
+        if not text:
+            continue
+        block_cites = [cid for cid in (block.get("citations") or []) if cid in citation_map]
+        if not block_cites:
+            continue
+        cleaned_blocks.append({
+            "id": block.get("id") or f"b{len(cleaned_blocks)+1}",
+            "text": text,
+            "citations": block_cites,
+            "type": block.get("type") or "paragraph"
+        })
+
+    if not cleaned_blocks:
+        return None
+
+    if not isinstance(sources, list):
+        sources = []
+
+    return {
+        "answer_blocks": cleaned_blocks,
+        "citations": citation_map,
+        "sources": sources
+    }
 
 def update_topic_labels(chroma_collection, topic_id_to_label):
     """Persist generated topic labels to all docs in the topic."""
@@ -987,6 +1141,8 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
         contexto_datos_str += f"- {text} (Fuente: {file_name})\n"
         evidence_datos.append({"text": text, "source": file_name, "score": score})
 
+    chunk_catalog_datos = extract_chunk_evidence(nodes_datos)
+
     # --- Step B: Bridging ---
     if not contexto_datos_str:
         contexto_datos_str = "No specific empirical data found."
@@ -1019,6 +1175,8 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
         contexto_antecedentes_str += f"- {text} (Fuente: {file_name})\n"
         evidence_antecedentes.append({"text": text, "source": file_name, "score": score})
 
+    chunk_catalog_antecedentes = extract_chunk_evidence(nodes_antecedentes)
+
     # --- Step D: Synthesis ---
     # Use i18n system prompt
     system_content = get_text("system_prompt", lang, discipline=disciplina, perspective=perspectiva, topic=tema)
@@ -1026,7 +1184,8 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
     user_content_final = (
         f"HISTORIAL CHAT:\n{chat_history}\n\n"
         f"[DATOS EMPÍRICOS]:\n{contexto_datos_str}\n\n"
-        f"[ANTECEDENTES] (Búsqueda basada en datos: '{query_teorica}'):\n{contexto_antecedentes_str}\n\n"
+        f"[ANTECEDENTES] (Búsqueda basada en datos: '{query_teorica}'):\n"
+        f"{contexto_antecedentes_str}\n\n"
         f"PREGUNTA USUARIO: {user_query}\n"
     )
     
@@ -1041,10 +1200,51 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
         f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
         f.write(f"Query: {user_query}\n")
         f.write(f"---\n{user_content_final}\n\n")
-    
+
+    chunk_catalog = []
+    for item in chunk_catalog_datos:
+        chunk_entry = dict(item)
+        chunk_entry["source_type"] = "data"
+        chunk_catalog.append(chunk_entry)
+    for item in chunk_catalog_antecedentes:
+        chunk_entry = dict(item)
+        chunk_entry["source_type"] = "theory"
+        chunk_catalog.append(chunk_entry)
+
+    chunk_lookup = {item["chunk_id"]: item for item in chunk_catalog if item.get("chunk_id")}
+
+    citations_system = get_text("citations_system_prompt", lang)
+    citations_instructions = get_text("citations_user_instructions", lang)
+
+    citations_payload = {
+        "task": "answer_with_citations",
+        "question": user_query,
+        "context": user_content_final,
+        "catalog": [
+            {
+                "chunk_id": item.get("chunk_id"),
+                "doc_id": item.get("doc_id"),
+                "title": item.get("title"),
+                "page": item.get("page"),
+                "start_char": item.get("start_char"),
+                "end_char": item.get("end_char"),
+                "source_type": item.get("source_type"),
+                "text_snippet": item.get("text_snippet")
+            }
+            for item in chunk_catalog
+        ],
+        "instructions": citations_instructions,
+        "constraints": {
+            "max_blocks": 4,
+            "max_citations_per_block": 2,
+            "prefer_snippets": True,
+            "prefer_titles": True
+        }
+    }
+
     messages = [
-        ChatMessage(role="system", content=system_content),
-        ChatMessage(role="user", content=user_content_final)
+        ChatMessage(role="system", content=f"{system_content}\n\n{citations_system}"),
+        ChatMessage(role="user", content=json.dumps(citations_payload, ensure_ascii=False))
     ]
 
     try:
@@ -1060,8 +1260,14 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
         f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
         f.write(f"Query: {user_query}\n")
         f.write(f"---\n{response_text}\n\n")
-    
-    return response_text, evidence_datos, evidence_antecedentes, query_teorica, nodes_datos
+
+    structured_payload = parse_json_response(response_text)
+    valid_payload = validate_citation_payload(structured_payload, set(chunk_lookup.keys()))
+
+    if valid_payload:
+        return valid_payload, evidence_datos, evidence_antecedentes, query_teorica, nodes_datos, chunk_lookup
+
+    return response_text, evidence_datos, evidence_antecedentes, query_teorica, nodes_datos, chunk_lookup
 
 # --- Streamlit UI ---
 
@@ -1268,13 +1474,15 @@ def set_pending_query(label, source):
     st.session_state.last_suggestions = []
     log_topic_event(f"Suggestion clicked ({source}): '{label[:80]}'")
 
+user_input = st.chat_input(t("chat_placeholder"))
+
 pending_used = False
 if st.session_state.pending_query:
     prompt = st.session_state.pending_query
     pending_used = True
     log_topic_event(f"Pending query consumed: '{prompt[:80]}'")
 else:
-    prompt = st.chat_input(t("chat_placeholder"))
+    prompt = user_input
 
 
 def render_evidence_item(item, idx, prefix, lang):
@@ -1302,10 +1510,101 @@ def render_evidence_item(item, idx, prefix, lang):
     st.divider()
 
 
+def format_page_label(value, lang):
+    if value is None:
+        return ""
+    try:
+        page_num = int(value)
+        return f"{get_text('page_label', lang)} {page_num}"
+    except (ValueError, TypeError):
+        return f"{get_text('page_label', lang)} {value}"
+
+
+def render_citation_badge(cite_label):
+    return (
+        "<span style='background:#2b2f3a;color:#dce3f0;"
+        "padding:2px 6px;border-radius:6px;font-size:12px;margin-left:4px;'>"
+        f"[{cite_label}]</span>"
+    )
+
+
+def build_citation_details(citation_payload, chunk_lookup, lang):
+    details = []
+    for cite_id, cite_data in citation_payload.items():
+        for chunk_id in cite_data["chunk_ids"]:
+            chunk = chunk_lookup.get(chunk_id)
+            if not chunk:
+                continue
+            title = chunk.get("title") or chunk.get("doc_id") or ""
+            page = format_page_label(chunk.get("page"), lang)
+            source_type = chunk.get("source_type")
+            if source_type:
+                source_type = get_text(
+                    "source_type_data" if source_type == "data" else "source_type_theory",
+                    lang
+                )
+            details.append({
+                "cite_id": cite_id,
+                "label": cite_data["label"],
+                "chunk_id": chunk_id,
+                "title": title,
+                "page": page,
+                "source_type": source_type,
+                "text": chunk.get("text")
+            })
+    return details
+
+
+def render_citations_inline(citations_payload, chunk_lookup, lang, show_details=True):
+    st.subheader(get_text("citations_title", lang))
+    details = build_citation_details(citations_payload["citations"], chunk_lookup, lang) if chunk_lookup else []
+    for block in citations_payload["answer_blocks"]:
+        cite_tags = "".join([
+            render_citation_badge(citations_payload["citations"][cid]["label"])
+            for cid in block["citations"]
+        ])
+        block_text = block["text"].replace("\n", "<br/>")
+        st.markdown(
+            f"<div style='margin-bottom:10px;'>{block_text} {cite_tags}</div>",
+            unsafe_allow_html=True
+        )
+
+        if not show_details or not chunk_lookup:
+            continue
+
+        with st.expander(get_text("citations_title", lang), expanded=False):
+            for item in details:
+                if item["cite_id"] not in block["citations"]:
+                    continue
+                header_bits = [
+                    f"{get_text('citation_label', lang)} {item['label']}",
+                    item["title"],
+                    item.get("page") or ""
+                ]
+                if item.get("source_type"):
+                    header_bits.append(item["source_type"])
+                header = " | ".join([bit for bit in header_bits if bit])
+                st.markdown(f"**{header}**")
+                if item.get("text"):
+                    formatted_text = format_text_for_display(item["text"])
+                    st.markdown(
+                        "<div style='background-color: #262730; padding: 10px; "
+                        "border-radius: 8px; margin-bottom: 10px; font-size: 13px; "
+                        "line-height: 1.5;'>"
+                        f"{formatted_text}</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.warning(get_text("citation_missing", lang, cite_id=item["label"]))
+
+
 # Display Chat History
 for msg_idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        if message.get("citations"):
+            render_citations_inline(message["citations"], {}, lang, show_details=False)
+        else:
+            st.markdown(message["content"])
         if "evidence" in message:
             with st.expander(t("evidence_title")):
                 tab_datos, tab_teoria = st.tabs([t("tab_data"), t("tab_theory")])
@@ -1356,7 +1655,7 @@ if prompt:
                 chat_history_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-4:]])
 
                 try:
-                    response_text, ev_datos, ev_ante, q_teo, nodes_datos = run_sociological_pipeline(
+                    response_payload, ev_datos, ev_ante, q_teo, nodes_datos, chunk_lookup = run_sociological_pipeline(
                         prompt, 
                         chat_history_str, 
                         st.session_state['index_datos'], 
@@ -1392,7 +1691,13 @@ if prompt:
                     log_bug_event(f"Suggestion generation failed: {e}")
                     st.warning(t("suggestions_error", error=e))
                 
-                st.markdown(response_text)
+                if isinstance(response_payload, dict):
+                    render_citations_inline(response_payload, chunk_lookup, lang)
+                    response_text = "\n\n".join([block["text"] for block in response_payload["answer_blocks"]])
+                else:
+                    response_text = response_payload
+                    st.warning(t("citations_parse_error"))
+                    st.markdown(response_text)
 
                 if suggestions:
                     st.subheader(t("suggestions_title"))
@@ -1427,6 +1732,7 @@ if prompt:
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": response_text,
+                    "citations": response_payload if isinstance(response_payload, dict) else None,
                     "evidence": {
                         "datos": ev_datos,
                         "antecedentes": ev_ante,
