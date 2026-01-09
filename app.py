@@ -134,8 +134,9 @@ TUS FUENTES DE INFORMACIÓN:
 INSTRUCCIONES DE RESPUESTA:
 - Basa tus afirmaciones principalmente en los [DATOS EMPÍRICOS].
 - Usa los [ANTECEDENTES] para teorizar o dar contexto a lo que encuentras en los datos.
+- Si hay antecedentes relevantes, incluye al menos una cita de [ANTECEDENTES].
 - Si los datos muestran algo distinto a la teoría, destaca esa tensión.
-- Cita siempre las fuentes. Ejemplo: "...se observa un patrón de negación ([Datos]: archivo_noticia.pdf)".""",
+- No incluyas citas inline en el texto. Las citas se entregan solo por JSON.""",
         "bridge_prompt": """TAREA: Genera palabras clave para buscar literatura académica relevante.
 
 CONTEXTO:
@@ -243,8 +244,9 @@ YOUR SOURCES OF INFORMATION:
 RESPONSE INSTRUCTIONS:
 - Base your claims primarily on the [EMPIRICAL DATA].
 - Use [BACKGROUND] to theorize or provide context to your findings.
+- If relevant background exists, include at least one [BACKGROUND] citation.
 - If the data shows something different from theory, highlight that tension.
-- Always cite sources. Example: "...a pattern of denial is observed ([Data]: news_file.pdf)".""",
+- Do not include inline citations in the text. Citations are provided via JSON only.""",
         "bridge_prompt": """TASK: Generate keywords to search for relevant academic literature.
 
 CONTEXT:
@@ -1570,6 +1572,14 @@ def render_citations_inline(citations_payload, chunk_lookup, lang, show_details=
         )
 
         if not show_details or not chunk_lookup:
+            continue
+
+        block_has_details = False
+        for item in details:
+            if item["cite_id"] in block["citations"]:
+                block_has_details = True
+                break
+        if not block_has_details:
             continue
 
         with st.expander(get_text("citations_title", lang), expanded=False):
