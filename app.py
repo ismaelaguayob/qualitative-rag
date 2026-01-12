@@ -22,7 +22,9 @@ from llama_index.core import (
     Document
 )
 from llama_index.core.llms import ChatMessage
+from llama_index.core.schema import QueryBundle
 from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.postprocessor.voyageai_rerank import VoyageAIRerank
 
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.voyageai import VoyageEmbedding
@@ -41,6 +43,7 @@ ANTECEDENTES_DIR = os.path.join(DATA_TEMP_PATH, "antecedentes")
 EXTRACTED_TEXT_DIR = os.path.join(DATA_TEMP_PATH, "extracted_text")
 DEBUG_DIR = os.path.join(DATA_TEMP_PATH, "debug")
 DEV_LOGS_DIR = os.path.join(DATA_TEMP_PATH, "dev_sessions")
+RERANK_LOG_PATH = os.path.join(DEBUG_DIR, "rerank_log.txt")
 
 # --- i18n: Internationalization ---
 I18N = {
@@ -91,16 +94,39 @@ I18N = {
         "advanced_settings": "⚙️ Ajustes Avanzados",
         "topic_k": "Número de tópicos (K)",
         "topic_k_help": "Cantidad de clusters temáticos para sugerencias.",
-        "chunk_size": "Tamaño de Chunk (caracteres)",
-        "chunk_overlap": "Overlap de Chunk (caracteres)",
+        "chunk_size": "Tamaño de Chunk (tokens)",
+        "chunk_overlap": "Overlap de Chunk (tokens)",
         "top_k_data": "Top-K Datos Empíricos",
         "top_k_theory": "Top-K Antecedentes",
-        "chunk_size_help": "Tamaño de cada fragmento de texto. Menor = más granular.",
-        "chunk_overlap_help": "Solapamiento entre chunks. Mayor = menos pérdida de contexto.",
+        "chunk_size_help": "Tamaño de cada fragmento en tokens. Menor = más granular.",
+        "chunk_overlap_help": "Solapamiento en tokens entre chunks. Mayor = menos pérdida de contexto.",
         "top_k_help": "Cantidad de fragmentos a recuperar por consulta.",
+        "rerank_model_label": "Modelo de Re-rank",
+        "rerank_model_help": "Modelo de VoyageAI para re-rank de resultados.",
+        "rerank_top_n_data": "Top-N Re-rank (Datos)",
+        "rerank_top_n_theory": "Top-N Re-rank (Antecedentes)",
+        "rerank_top_n_help": "Cantidad de resultados finales tras re-rank (debe ser <= Top-K).",
+        "rerank_ratio_hint": "Sugerencia: usa un Top-K 2–3× mayor que el Top-N para mejorar el re-rank.",
         "settings_note": "⚠️ Reinicializa los índices después de cambiar estos valores.",
         "suggestions_title": "Sugerencias de preguntas",
         "suggestion_button": "➕ Usar sugerencia",
+        "suggestions_system_prompt": (
+            "Eres un asistente que genera sugerencias de investigación. "
+            "Responde SOLO en JSON válido. No incluyas texto adicional."
+        ),
+        "suggestions_bootstrap_instructions": (
+            "Genera 3-6 preguntas sugeridas relevantes al contexto y a los tópicos. "
+            "No repitas preguntas. Responde en JSON con 'suggestions'."
+        ),
+        "suggestions_query_instructions": (
+            "Genera 3-6 preguntas sugeridas relevantes al user_query y a los tópicos. "
+            "No repitas preguntas. Responde en JSON con 'suggestions'."
+        ),
+        "suggestions_constraints": [
+            "No hables como si fueras una persona entrevistada.",
+            "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
+            "Formula preguntas como investigador/a (tercera persona)."
+        ],
         "citations_title": "📌 Citas y Fuentes",
         "citation_label": "Cita",
         "citation_missing": "Fragmento no disponible para la cita {cite_id}.",
@@ -201,16 +227,39 @@ RESPUESTA:"""
         "advanced_settings": "⚙️ Advanced Settings",
         "topic_k": "Number of topics (K)",
         "topic_k_help": "Number of thematic clusters for suggestions.",
-        "chunk_size": "Chunk Size (characters)",
-        "chunk_overlap": "Chunk Overlap (characters)",
+        "chunk_size": "Chunk Size (tokens)",
+        "chunk_overlap": "Chunk Overlap (tokens)",
         "top_k_data": "Top-K Empirical Data",
         "top_k_theory": "Top-K Background",
-        "chunk_size_help": "Size of each text fragment. Smaller = more granular.",
-        "chunk_overlap_help": "Overlap between chunks. Higher = less context loss.",
+        "chunk_size_help": "Size of each chunk in tokens. Smaller = more granular.",
+        "chunk_overlap_help": "Token overlap between chunks. Higher = less context loss.",
         "top_k_help": "Number of fragments to retrieve per query.",
+        "rerank_model_label": "Re-rank Model",
+        "rerank_model_help": "VoyageAI model for reranking results.",
+        "rerank_top_n_data": "Re-rank Top-N (Data)",
+        "rerank_top_n_theory": "Re-rank Top-N (Background)",
+        "rerank_top_n_help": "Number of final results after rerank (must be <= Top-K).",
+        "rerank_ratio_hint": "Suggestion: keep Top-K about 2–3× larger than Top-N to improve reranking.",
         "settings_note": "⚠️ Reinitialize indices after changing these values.",
         "suggestions_title": "Suggested questions",
         "suggestion_button": "➕ Use suggestion",
+        "suggestions_system_prompt": (
+            "You are an assistant that generates research question suggestions. "
+            "Respond ONLY with valid JSON. Do not include extra text."
+        ),
+        "suggestions_bootstrap_instructions": (
+            "Generate 3-6 suggested questions relevant to the context and topics. "
+            "Do not repeat questions. Respond in JSON with 'suggestions'."
+        ),
+        "suggestions_query_instructions": (
+            "Generate 3-6 suggested questions relevant to the user_query and topics. "
+            "Do not repeat questions. Respond in JSON with 'suggestions'."
+        ),
+        "suggestions_constraints": [
+            "Do not speak as if you were an interviewee.",
+            "Do not use 'your experience' or direct first/second person aimed at the interviewee.",
+            "Phrase questions as a researcher (third person)."
+        ],
         "citations_title": "📌 Citations & Sources",
         "citation_label": "Citation",
         "citation_missing": "Chunk not available for citation {cite_id}.",
@@ -287,6 +336,10 @@ def _append_log(log_path, message):
 
 def log_topic_event(message):
     _append_log(os.path.join(DEBUG_DIR, "topic_log.txt"), message)
+
+
+def log_rerank_event(message):
+    _append_log(RERANK_LOG_PATH, message)
 
 def log_bug_event(message):
     _append_log(os.path.join(DEBUG_DIR, "bug_log.txt"), message)
@@ -589,6 +642,22 @@ def clip_text(text, limit=800):
     return text[:limit]
 
 
+def format_nodes_for_log(nodes, max_snippet=240):
+    lines = []
+    for idx, node in enumerate(nodes, start=1):
+        meta = node.metadata or {}
+        node_id = getattr(node, "node_id", None)
+        if node_id is None and hasattr(node, "node"):
+            node_id = getattr(node.node, "node_id", None)
+        file_name = meta.get("file_name", "Unknown")
+        score = node.score if node.score is not None else 0.0
+        snippet = normalize_extracted_text(node.text or "")[:max_snippet]
+        lines.append(
+            f"{idx}. score={score:.4f} source={file_name} chunk_id={node_id} | {snippet}"
+        )
+    return "\n".join(lines)
+
+
 def validate_citation_payload(payload, allowed_chunk_ids):
     """Validate structured citation payload against retrieved chunks."""
     if not isinstance(payload, dict):
@@ -701,23 +770,13 @@ def generate_bootstrap_suggestions(context_text, llm_suggest, chroma_collection,
             "snippets": snippets
         })
 
-    system_prompt = (
-        "Eres un asistente que genera sugerencias de investigación. "
-        "Responde SOLO en JSON válido. No incluyas texto adicional."
-    )
+    system_prompt = get_text("suggestions_system_prompt", lang)
     user_prompt = {
         "task": "bootstrap_suggest",
         "user_query": context_text,
         "topics": topic_payload,
-        "instructions": (
-            "Genera 3-6 preguntas sugeridas relevantes al contexto y a los tópicos. "
-            "No repitas preguntas. Responde en JSON con 'suggestions'."
-        ),
-        "constraints": [
-            "No hables como si fueras una persona entrevistada.",
-            "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
-            "Formula preguntas como investigador/a (tercera persona)."
-        ],
+        "instructions": get_text("suggestions_bootstrap_instructions", lang),
+        "constraints": get_text("suggestions_constraints", lang),
         "schema": {
             "suggestions": [{
                 "id": "string",
@@ -888,15 +947,8 @@ def generate_suggestions(user_query, nodes_datos, llm_suggest, chroma_collection
         "task": "suggest_only",
         "user_query": user_query,
         "topics": topic_payload,
-        "instructions": (
-            "Genera 3-6 preguntas sugeridas relevantes al user_query y a los tópicos. "
-            "No repitas preguntas. Responde en JSON con 'suggestions'."
-        ),
-        "constraints": [
-            "No hables como si fueras una persona entrevistada.",
-            "No uses 'tu experiencia' ni primera/segunda persona dirigida al entrevistado.",
-            "Formula preguntas como investigador/a (tercera persona)."
-        ],
+        "instructions": get_text("suggestions_query_instructions", lang),
+        "constraints": get_text("suggestions_constraints", lang),
         "schema": {
             "suggestions": [{
                 "id": "string",
@@ -1123,16 +1175,58 @@ def reset_indices_in_session():
 # --- Pipeline Logic ---
 
 def run_sociological_pipeline(user_query, chat_history, index_datos, index_antecedentes, llm_main, llm_bridge, disciplina, perspectiva, tema, lang="es"):
-    
+
     # Use top_k from session state (or defaults)
-    top_k_data = st.session_state.get("top_k_data", 7)
-    top_k_theory = st.session_state.get("top_k_theory", 5)
-    
+    top_k_data = st.session_state.get("top_k_data", 20)
+    top_k_theory = st.session_state.get("top_k_theory", 15)
+    rerank_top_n_data = st.session_state.get("rerank_top_n_data", min(7, top_k_data))
+    rerank_top_n_theory = st.session_state.get("rerank_top_n_theory", min(5, top_k_theory))
+    rerank_model = st.session_state.get("rerank_model", "rerank-2.5")
+
+    if rerank_top_n_data > top_k_data:
+        rerank_top_n_data = top_k_data
+    if rerank_top_n_theory > top_k_theory:
+        rerank_top_n_theory = top_k_theory
+
+    def _apply_rerank(nodes, query, reranker, top_n, label):
+        if not nodes:
+            log_topic_event(f"Rerank skipped ({label}): no nodes.")
+            return []
+        try:
+            reranked = reranker.postprocess_nodes(nodes, query_bundle=QueryBundle(query_str=query))
+            if reranked is None:
+                log_bug_event(f"Rerank returned None ({label}).")
+                return nodes[:top_n]
+            log_topic_event(
+                f"Rerank ok ({label}): input={len(nodes)} output={len(reranked)} top_n={top_n}"
+            )
+            return reranked
+        except Exception as e:
+            log_bug_event(f"Rerank failed ({label}): {e}")
+            log_bug_event(traceback.format_exc())
+            return nodes[:top_n]
+
     retriever_datos = index_datos.as_retriever(similarity_top_k=top_k_data)
     retriever_antecedentes = index_antecedentes.as_retriever(similarity_top_k=top_k_theory)
 
     # --- Step A: Grounding ---
     nodes_datos = retriever_datos.retrieve(user_query)
+    log_rerank_event(
+        f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} | Query: {user_query[:120]} ==="
+    )
+    log_rerank_event(
+        "TOP-K datos (pre-rerank):\n" + format_nodes_for_log(nodes_datos)
+    )
+    reranker_data = VoyageAIRerank(
+        model=rerank_model,
+        api_key=os.getenv("VOYAGE_KEY"),
+        top_n=rerank_top_n_data
+    )
+    nodes_datos = _apply_rerank(nodes_datos, user_query, reranker_data, rerank_top_n_data, "datos")
+    nodes_datos = nodes_datos[:rerank_top_n_data]
+    log_rerank_event(
+        "TOP-N datos (post-rerank):\n" + format_nodes_for_log(nodes_datos)
+    )
     contexto_datos_str = ""
     evidence_datos = []
     
@@ -1167,6 +1261,24 @@ def run_sociological_pipeline(user_query, chat_history, index_datos, index_antec
 
     # --- Step C: Theorizing ---
     nodes_antecedentes = retriever_antecedentes.retrieve(query_teorica)
+    log_rerank_event(
+        f"--- Bridge query (antecedentes): {query_teorica[:160]} ---"
+    )
+    log_rerank_event(
+        "TOP-K antecedentes (pre-rerank):\n" + format_nodes_for_log(nodes_antecedentes)
+    )
+    reranker_theory = VoyageAIRerank(
+        model=rerank_model,
+        api_key=os.getenv("VOYAGE_KEY"),
+        top_n=rerank_top_n_theory
+    )
+    nodes_antecedentes = _apply_rerank(
+        nodes_antecedentes, query_teorica, reranker_theory, rerank_top_n_theory, "antecedentes"
+    )
+    nodes_antecedentes = nodes_antecedentes[:rerank_top_n_theory]
+    log_rerank_event(
+        "TOP-N antecedentes (post-rerank):\n" + format_nodes_for_log(nodes_antecedentes)
+    )
     contexto_antecedentes_str = ""
     evidence_antecedentes = []
 
@@ -1321,11 +1433,17 @@ with st.sidebar:
         if "chunk_overlap" not in st.session_state:
             st.session_state.chunk_overlap = 128
         if "top_k_data" not in st.session_state:
-            st.session_state.top_k_data = 7
+            st.session_state.top_k_data = 20
         if "top_k_theory" not in st.session_state:
-            st.session_state.top_k_theory = 5
+            st.session_state.top_k_theory = 15
         if "topic_k" not in st.session_state:
             st.session_state.topic_k = 6
+        if "rerank_model" not in st.session_state:
+            st.session_state.rerank_model = "rerank-2.5"
+        if "rerank_top_n_data" not in st.session_state:
+            st.session_state.rerank_top_n_data = 7
+        if "rerank_top_n_theory" not in st.session_state:
+            st.session_state.rerank_top_n_theory = 5
 
         st.session_state.topic_k = st.slider(
             t("topic_k"),
@@ -1349,15 +1467,36 @@ with st.sidebar:
         )
         st.session_state.top_k_data = st.slider(
             t("top_k_data"), 
-            min_value=3, max_value=15, 
+            min_value=3, max_value=30, 
             value=st.session_state.top_k_data,
             help=t("top_k_help")
         )
         st.session_state.top_k_theory = st.slider(
             t("top_k_theory"), 
-            min_value=3, max_value=15, 
+            min_value=3, max_value=30, 
             value=st.session_state.top_k_theory,
             help=t("top_k_help")
+        )
+        st.session_state.rerank_model = st.selectbox(
+            t("rerank_model_label"),
+            ("rerank-2.5", "rerank-2.5-lite", "rerank-2", "rerank-2-lite"),
+            index=("rerank-2.5", "rerank-2.5-lite", "rerank-2", "rerank-2-lite").index(
+                st.session_state.rerank_model
+            ),
+            help=t("rerank_model_help")
+        )
+        st.caption(t("rerank_ratio_hint"))
+        st.session_state.rerank_top_n_data = st.slider(
+            t("rerank_top_n_data"),
+            min_value=1, max_value=15,
+            value=st.session_state.rerank_top_n_data,
+            help=t("rerank_top_n_help")
+        )
+        st.session_state.rerank_top_n_theory = st.slider(
+            t("rerank_top_n_theory"),
+            min_value=1, max_value=15,
+            value=st.session_state.rerank_top_n_theory,
+            help=t("rerank_top_n_help")
         )
 
     st.subheader(t("file_upload"))
